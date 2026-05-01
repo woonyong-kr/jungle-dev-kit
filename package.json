@@ -1,0 +1,231 @@
+{
+  "name": "jungle-dev-kit",
+  "displayName": "Jungle Dev Kit",
+  "description": "PintOS/OS 과제 팀 개발을 위한 올인원 VS Code 익스텐션 — 코딩 스타일 강제, Git 가이드, 팀 진행률, AI 코드리뷰",
+  "version": "0.1.0",
+  "publisher": "woonyong",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/woonyong/jungle-dev-kit"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "SCM Providers",
+    "Testing",
+    "Other"
+  ],
+  "keywords": [
+    "pintos",
+    "os",
+    "team",
+    "code-review",
+    "git"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/Makefile.build",
+    "workspaceContains:**/pintos/activate",
+    "workspaceContains:.jungle-kit/config.json"
+  ],
+  "main": "./out/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "jungleKit.init",
+        "title": "Jungle Kit: Initialize Project"
+      },
+      {
+        "command": "jungleKit.styleCheck",
+        "title": "Jungle Kit: Check Coding Style"
+      },
+      {
+        "command": "jungleKit.duplicateCheck",
+        "title": "Jungle Kit: Check Duplicate Code"
+      },
+      {
+        "command": "jungleKit.mergePreview",
+        "title": "Jungle Kit: Merge Preview"
+      },
+      {
+        "command": "jungleKit.pullAndPush",
+        "title": "Jungle Kit: Pull & Push"
+      },
+      {
+        "command": "jungleKit.undoLastCommit",
+        "title": "Jungle Kit: Undo Last Commit"
+      },
+      {
+        "command": "jungleKit.addLocalNote",
+        "title": "Jungle Kit: Add Local Note"
+      },
+      {
+        "command": "jungleKit.generatePRTemplate",
+        "title": "Jungle Kit: Generate PR Template"
+      },
+      {
+        "command": "jungleKit.updateProgress",
+        "title": "Jungle Kit: Update My Progress"
+      },
+      {
+        "command": "jungleKit.validateEnv",
+        "title": "Jungle Kit: Validate Environment"
+      },
+      {
+        "command": "jungleKit.aiReview",
+        "title": "Jungle Kit: AI Code Review"
+      },
+      {
+        "command": "jungleKit.analyzePanic",
+        "title": "Jungle Kit: Analyze Kernel Panic"
+      },
+      {
+        "command": "jungleKit.explainTestFailure",
+        "title": "Jungle Kit: Explain Test Failure"
+      },
+      {
+        "command": "jungleKit.generateCommitMessage",
+        "title": "Jungle Kit: Generate Commit Message"
+      },
+      {
+        "command": "jungleKit.setApiKey",
+        "title": "Jungle Kit: Set OpenAI API Key"
+      },
+      {
+        "command": "jungleKit.removeApiKey",
+        "title": "Jungle Kit: Remove OpenAI API Key"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "jungleKit",
+          "title": "Jungle Dev Kit",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "jungleKit": [
+        {
+          "id": "jungleKit.gitGuide",
+          "name": "Git Guide"
+        },
+        {
+          "id": "jungleKit.teamProgress",
+          "name": "Team Progress"
+        },
+        {
+          "id": "jungleKit.reviewHistory",
+          "name": "Review History"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Jungle Dev Kit",
+      "properties": {
+        "jungleKit.project": {
+          "type": "string",
+          "default": "pintos",
+          "enum": [
+            "pintos",
+            "xv6",
+            "custom"
+          ],
+          "description": "Target OS project type"
+        },
+        "jungleKit.pullReminder.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic pull reminders"
+        },
+        "jungleKit.pullReminder.intervalMinutes": {
+          "type": "number",
+          "default": 30,
+          "description": "Background fetch interval in minutes"
+        },
+        "jungleKit.branchManager.protectedBranches": {
+          "type": "array",
+          "default": [
+            "main",
+            "dev",
+            "master"
+          ],
+          "description": "Branches protected from force push"
+        },
+        "jungleKit.style.autoCreateClangFormat": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-create .clang-format if missing"
+        },
+        "jungleKit.duplicateDetector.minTokens": {
+          "type": "number",
+          "default": 50,
+          "description": "Minimum token count to consider as duplicate"
+        },
+        "jungleKit.localComments.prefix": {
+          "type": "string",
+          "default": "@local",
+          "description": "Prefix for local-only comments (e.g. // @local)"
+        },
+        "jungleKit.ai.model": {
+          "type": "string",
+          "default": "gpt-4o",
+          "enum": [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo"
+          ],
+          "description": "OpenAI model for AI features"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "jungleKit.addLocalNote",
+          "group": "jungleKit@1",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "jungleKit.aiReview",
+          "group": "jungleKit@2",
+          "when": "editorTextFocus"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "jungleKit.generateCommitMessage",
+          "group": "navigation",
+          "when": "scmProvider == git"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {
+    "openai": "^4.20.0"
+  }
+}
