@@ -1047,8 +1047,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	// Auto-warn: 진단(컴파일 에러/경고) 감지 시 @warn 자동 삽입
 	// ──────────────────────────────────────────
 
-	private _warnedDiagKeys = new Set<string> ();
-
 	private _warnDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _warnPendingUris = new Set<string> ();
 
