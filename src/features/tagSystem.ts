@@ -39,6 +39,7 @@ interface Annotation {
 	commitHash: string | null;
 	author: string | null;
 	sortOrder?: number;  // 사용자 드래그 정렬 순서
+	virtual?: boolean;   // true이면 사이드바 전용 (파일에 주석 없음, 진단/diff 자동 생성)
 }
 
 interface AnnotationsData {
@@ -153,7 +154,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 		const data: AnnotationsData = {
 			version: 2,
-			annotations: this.annotations,
+			// 가상 항목은 영속 저장하지 않음 (세션 전용)
+			annotations: this.annotations.filter ((a) => !a.virtual),
 		};
 		fs.writeFileSync (this.dataFilePath, JSON.stringify (data, null, 2));
 	}
@@ -248,14 +250,14 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 		}
 
-		// 기존 해당 파일의 auto-review (commitHash 있는) annotation 보존
+		// 기존 해당 파일의 가상 annotation 보존 (scanDocument에서 덮어쓰지 않음)
 		const autoReviews = this.annotations.filter (
-			(a) => a.file === relativePath && a.type === 'review' && a.commitHash
+			(a) => a.file === relativePath && a.virtual
 		);
 
-		// 해당 파일의 annotation 제거 (auto-review 제외)
+		// 해당 파일의 annotation 제거 (가상 항목은 보존)
 		this.annotations = this.annotations.filter (
-			(a) => a.file !== relativePath || (a.type === 'review' && a.commitHash)
+			(a) => a.file !== relativePath || a.virtual
 		);
 
 		// 파일 스캔
@@ -892,6 +894,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const tooltipLines = [
 			`**@${ann.type}** ${ann.content}`,
 		];
+		if (ann.virtual) {
+			tooltipLines.push (`_자동 감지 (파일에 없음)_`);
+		}
 		if (ann.displayLabel && ann.displayLabel !== ann.content) {
 			tooltipLines.push (`표시: _${ann.displayLabel}_`);
 		}
@@ -1047,14 +1052,13 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private _warnDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _warnPendingUris = new Set<string> ();
 
+	/**
+	 * 가상 auto-warn: 진단(에러)을 사이드바에만 표시하고 파일에는 쓰지 않는다.
+	 * 진단이 해결되면 자동으로 사이드바에서 제거된다.
+	 */
 	private registerAutoWarn (context: vscode.ExtensionContext): void {
-		// 무한 루프 방지: @warn 삽입 직후에는 진단 변경을 무시
-		let suppressUntil = 0;
-
 		context.subscriptions.push (
 			vscode.languages.onDidChangeDiagnostics ((event) => {
-				if (Date.now () < suppressUntil) { return; }
-
 				for (const uri of event.uris) {
 					if (uri.scheme !== 'file') { continue; }
 					const filePath = uri.fsPath;
@@ -1062,126 +1066,63 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					this._warnPendingUris.add (uri.toString ());
 				}
 
-				// 디바운스: 2초 대기 후 일괄 처리
 				if (this._warnDebounceTimer) { clearTimeout (this._warnDebounceTimer); }
-				this._warnDebounceTimer = setTimeout (async () => {
+				this._warnDebounceTimer = setTimeout (() => {
 					const uris = [...this._warnPendingUris];
 					this._warnPendingUris.clear ();
-
-					for (const uriStr of uris) {
-						const uri = vscode.Uri.parse (uriStr);
-						const diagnostics = vscode.languages.getDiagnostics (uri);
-
-						// 컴파일 에러만 대상 (스타일/린트 제외)
-						const errors = diagnostics.filter ((d) => {
-							if (d.severity !== vscode.DiagnosticSeverity.Error) { return false; }
-							const src = (d.source || '').toLowerCase ();
-							const msg = d.message.toLowerCase ();
-							// clang-format, 스타일 관련 진단은 제외
-							if (src.includes ('clang-format')) { return false; }
-							if (msg.includes ('clang-formatted')) { return false; }
-							if (msg.includes ('code should be')) { return false; }
-							return true;
-						});
-
-						// 해결된 진단 키 정리
-						const relativePath = vscode.workspace.asRelativePath (uri);
-						const currentKeys = new Set (
-							errors.map ((d) => `${relativePath}:${d.range.start.line}:${d.message.substring (0, 50)}`)
-						);
-						for (const key of this._warnedDiagKeys) {
-							if (key.startsWith (relativePath + ':') && !currentKeys.has (key)) {
-								this._warnedDiagKeys.delete (key);
-							}
-						}
-
-						if (errors.length === 0) { continue; }
-
-						// 파일당 최대 10개까지만
-						const limited = errors.slice (0, 10);
-						suppressUntil = Date.now () + 3000;
-						await this.insertAutoWarns (uri, limited);
-					}
+					this.syncVirtualWarns (uris);
 				}, 2000);
 			})
 		);
 	}
 
-	private async insertAutoWarns (
-		uri: vscode.Uri,
-		diagnostics: vscode.Diagnostic[]
-	): Promise<void> {
-		const relativePath = vscode.workspace.asRelativePath (uri);
+	/**
+	 * 가상 @warn 동기화: 현재 진단 상태와 사이드바를 일치시킨다.
+	 * 새 에러 → 가상 항목 추가, 해결된 에러 → 가상 항목 제거.
+	 */
+	private syncVirtualWarns (uriStrings: string[]): void {
+		let changed = false;
 
-		// 역순 정렬 (큰 줄번호부터 삽입)
-		const sorted = [...diagnostics].sort ((a, b) => b.range.start.line - a.range.start.line);
-		const toInsert: Array<{ line: number; comment: string }> = [];
+		for (const uriStr of uriStrings) {
+			const uri = vscode.Uri.parse (uriStr);
+			const relativePath = vscode.workspace.asRelativePath (uri);
+			const diagnostics = vscode.languages.getDiagnostics (uri);
 
-		for (const diag of sorted) {
-			const line = diag.range.start.line;
-			const key = `${relativePath}:${line}:${diag.message.substring (0, 50)}`;
-
-			// 이미 처리한 진단은 건너뜀
-			if (this._warnedDiagKeys.has (key)) { continue; }
-
-			// 해당 줄 근처에 이미 @warn이 있으면 건너뜀
-			const hasWarn = this.annotations.some (
-				(a) => a.file === relativePath && a.type === 'warn'
-					&& Math.abs (a.line - line) <= 1
+			const errors = diagnostics.filter ((d) =>
+				d.severity === vscode.DiagnosticSeverity.Error
 			);
-			if (hasWarn) { continue; }
 
-			const msg = diag.message.replace (/\n/g, ' ').substring (0, 100);
-			const source = diag.source ? `[${diag.source}] ` : '';
-			toInsert.push ({
-				line,
-				comment: `/* @warn ${source}${msg} */`,
-			});
-			this._warnedDiagKeys.add (key);
-		}
+			// 이 파일의 기존 가상 @warn 제거
+			this.annotations = this.annotations.filter (
+				(a) => !(a.file === relativePath && a.type === 'warn' && a.virtual)
+			);
 
-		if (toInsert.length === 0) { return; }
-
-		// WorkspaceEdit로 주석 삽입 (VS Code 문서 모델과 동기화)
-		const edit = new vscode.WorkspaceEdit ();
-
-		const openDoc = vscode.workspace.textDocuments.find (
-			(d) => d.uri.toString () === uri.toString ()
-		);
-		for (const ins of toInsert) {
-			// 에러 줄 바로 위에 @warn 주석 삽입
-			const insertLine = Math.max (0, ins.line);
-			if (openDoc) {
-				// 에러 줄 위에 있는 줄이 이미 @warn이면 건너뜀
-				if (insertLine > 0) {
-					const aboveLine = openDoc.lineAt (insertLine - 1).text;
-					if (aboveLine.match (/(?:\/\/|\/\*)\s*@warn\b/)) { continue; }
-				}
-				// 에러 줄의 들여쓰기를 맞춤
-				const indent = openDoc.lineAt (insertLine).text.match (/^(\s*)/)?.[1] || '';
-				const pos = new vscode.Position (insertLine, 0);
-				edit.insert (uri, pos, indent + ins.comment + '\n');
-			} else {
-				const pos = new vscode.Position (insertLine, 0);
-				edit.insert (uri, pos, ins.comment + '\n');
+			// 현재 에러들을 가상 @warn으로 추가 (파일당 최대 20개)
+			const limited = errors.slice (0, 20);
+			for (const diag of limited) {
+				const msg = diag.message.replace (/\n/g, ' ').substring (0, 100);
+				const source = diag.source ? `[${diag.source}] ` : '';
+				this.annotations.push ({
+					id: `vwarn-${relativePath}:${diag.range.start.line}:${Date.now ()}`,
+					type: 'warn',
+					file: relativePath,
+					line: diag.range.start.line,
+					content: `${source}${msg}`,
+					displayLabel: null,
+					createdAt: new Date ().toISOString (),
+					commitHash: null,
+					author: null,
+					virtual: true,
+				});
 			}
+
+			changed = true;
 		}
 
-		await vscode.workspace.applyEdit (edit);
-
-		// 삽입 후 문서 다시 스캔
-		const doc = vscode.workspace.textDocuments.find (
-			(d) => d.uri.toString () === uri.toString ()
-		);
-		if (doc) {
-			this.scanDocument (doc);
+		if (changed) {
 			this.updateAllDecorations ();
 			this._onDidChangeTreeData.fire ();
 		}
-
-		console.log (
-			`[Annotation] @warn ${toInsert.length}개 자동 생성 (${path.basename (uri.fsPath)})`
-		);
 	}
 
 	// ──────────────────────────────────────────
@@ -1218,6 +1159,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		);
 	}
 
+	/**
+	 * 가상 auto-review: diff에서 새 코드를 감지하면
+	 * 사이드바에만 @review 항목을 표시한다. 파일에는 쓰지 않는다.
+	 */
 	private async generateReviewsForDiff (oldHead: string, newHead: string): Promise<void> {
 		const root = this.config.getWorkspaceRoot ();
 		if (!root) { return; }
@@ -1246,8 +1191,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			if (additions.length === 0) { return; }
 
 			let addedCount = 0;
-			// 파일별로 삽입할 주석을 모아서 역순으로 삽입 (줄번호 밀림 방지)
-			const insertsByFile = new Map<string, Array<{ line: number; comment: string }>> ();
 
 			for (const add of additions) {
 				const exists = this.annotations.some (
@@ -1264,45 +1207,27 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					description = this.generateDoxygenDescription (add);
 				}
 
-				const comment = `/* @review [${commitAuthor}] ${description} */`;
-				if (!insertsByFile.has (add.file)) {
-					insertsByFile.set (add.file, []);
-				}
-				insertsByFile.get (add.file)!.push ({ line: add.line, comment });
+				// 가상 @review 추가 (파일에 쓰지 않음)
+				this.annotations.push ({
+					id: `vreview-${add.file}:${add.line}:${Date.now ()}`,
+					type: 'review',
+					file: add.file,
+					line: add.line,
+					content: `[${commitAuthor}] ${description}`,
+					displayLabel: null,
+					createdAt: new Date ().toISOString (),
+					commitHash: newHead,
+					author: commitAuthor,
+					virtual: true,
+				});
 				addedCount++;
 			}
 
 			if (addedCount > 0) {
-				// WorkspaceEdit로 파일에 실제 주석 삽입
-				const edit = new vscode.WorkspaceEdit ();
-
-				for (const [file, inserts] of insertsByFile) {
-					const filePath = path.join (root, file);
-					if (!fs.existsSync (filePath)) { continue; }
-
-					const fileUri = vscode.Uri.file (filePath);
-					// 역순 정렬 (큰 줄번호부터 삽입해야 앞 줄번호가 밀리지 않음)
-					inserts.sort ((a, b) => b.line - a.line);
-
-					for (const ins of inserts) {
-						const pos = new vscode.Position (ins.line, 0);
-						edit.insert (fileUri, pos, ins.comment + '\n');
-					}
-				}
-
-				await vscode.workspace.applyEdit (edit);
-
-				// 삽입 후 열려있는 문서를 다시 스캔
-				for (const doc of vscode.workspace.textDocuments) {
-					if (insertsByFile.has (vscode.workspace.asRelativePath (doc.uri))) {
-						this.scanDocument (doc);
-					}
-				}
-
 				this.updateAllDecorations ();
 				this._onDidChangeTreeData.fire ();
 				console.log (
-					`[Annotation] @review ${addedCount}개 자동 생성 (${newHead.substring (0, 7)} — ${commitAuthor})`
+					`[Annotation] @review ${addedCount}개 가상 생성 (${newHead.substring (0, 7)} — ${commitAuthor})`
 				);
 			}
 		} catch (err) {
