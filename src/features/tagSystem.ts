@@ -126,6 +126,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		this.scanVisibleEditors ();
 		this._onDidChangeTreeData.fire ();
 
+		// 워크스페이스 전체에서 @breakpoint 어노테이션 스캔 (열려있지 않은 파일 포함)
+		await this.scanWorkspaceBreakpoints ();
+
 		// 스캔 완료 후 브레이크포인트 설정
 		this.syncBreakpoints ();
 	}
@@ -364,6 +367,30 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		for (const editor of vscode.window.visibleTextEditors) {
 			this.scanDocument (editor.document);
 			this.updateEditorDecorations (editor);
+		}
+	}
+
+	/**
+	 * 워크스페이스 전체에서 @breakpoint 어노테이션이 있는 파일을 검색하고 스캔한다.
+	 * 에디터에 열려있지 않은 파일도 포함하여 브레이크포인트와 조사식이 누락되지 않게 한다.
+	 */
+	private async scanWorkspaceBreakpoints (): Promise<void> {
+		const files = await vscode.workspace.findFiles ('**/*.{c,h}', '**/build/**', 200);
+		for (const fileUri of files) {
+			const relativePath = vscode.workspace.asRelativePath (fileUri);
+			// 이미 스캔된 파일이면서 @breakpoint가 있으면 건너뛰기
+			if (this.annotations.some ((a) => a.file === relativePath && a.type === 'breakpoint')) {
+				continue;
+			}
+			try {
+				const doc = await vscode.workspace.openTextDocument (fileUri);
+				const text = doc.getText ();
+				if (text.includes ('@breakpoint')) {
+					this.scanDocument (doc);
+				}
+			} catch {
+				// 파일 열기 실패 무시
+			}
 		}
 	}
 
