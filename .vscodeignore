@@ -1,0 +1,9 @@
+.vscode/**
+src/**
+docs/**
+*.ts
+!out/**
+.gitignore
+tsconfig.json
+.clang-format
+.jungle-kit/**

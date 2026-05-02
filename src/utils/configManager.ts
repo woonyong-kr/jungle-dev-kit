@@ -31,11 +31,11 @@ export interface StyleConfig {
 
 const DEFAULT_CONVENTION: ConventionConfig = {
 	commitPrefix: ['feat', 'fix', 'docs', 'refactor', 'test', 'chore', 'style'],
-	commitFormat: '<type>(<scope>): <description>',
+	commitFormat: '<type>: <한국어 제목>',
 	branchFormat: '<type>/<project>-<description>',
 	branchTypes: ['feature', 'fix', 'hotfix'],
 	projects: ['threads', 'userprog', 'vm', 'filesys'],
-	protectedBranches: ['main', 'dev', 'master'],
+	protectedBranches: ['main', 'master'],
 };
 
 const DEFAULT_ENV: EnvConfig = {
@@ -109,9 +109,7 @@ export class ConfigManager {
 		// Add notes to .gitignore (local-only)
 		await this.ensureGitignoreEntry ('notes/');
 
-		vscode.window.showInformationMessage (
-			'Jungle Dev Kit initialized: .jungle-kit/ created'
-		);
+		console.log ('[Annotation] initialized: .jungle-kit/ created');
 	}
 
 	loadConvention (): ConventionConfig {

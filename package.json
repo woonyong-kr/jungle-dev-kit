@@ -1,10 +1,15 @@
 {
   "name": "jungle-dev-kit",
-  "displayName": "Jungle Dev Kit",
-  "description": "PintOS/OS 과제 팀 개발을 위한 올인원 VS Code 익스텐션 — 코딩 스타일 강제, Git 가이드, 팀 진행률, AI 코드리뷰",
-  "version": "0.1.0",
+  "displayName": "Annotation",
+  "description": "코드 주석 태그로 팀 협업 — @todo, @bookmark, @review, @warn, @breakpoint, @local 태그를 사이드바에서 관리하고, git diff에서 자동 제외",
+  "version": "0.10.0",
   "publisher": "woonyong",
   "license": "MIT",
+  "icon": "resources/icon.png",
+  "galleryBanner": {
+    "color": "#1E1E2E",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/woonyong/jungle-dev-kit"
@@ -15,7 +20,6 @@
   "categories": [
     "Linters",
     "SCM Providers",
-    "Testing",
     "Other"
   ],
   "keywords": [
@@ -23,12 +27,15 @@
     "os",
     "team",
     "code-review",
-    "git"
+    "git",
+    "collaboration"
   ],
   "activationEvents": [
     "workspaceContains:**/Makefile.build",
-    "workspaceContains:**/pintos/activate",
-    "workspaceContains:.jungle-kit/config.json"
+    "workspaceContains:**/Makefile",
+    "workspaceContains:**/*.c",
+    "workspaceContains:.jungle-kit/config.json",
+    "onCommand:jungleKit.init"
   ],
   "main": "./out/extension.js",
   "extensionKind": [
@@ -38,74 +45,115 @@
     "commands": [
       {
         "command": "jungleKit.init",
-        "title": "Jungle Kit: Initialize Project"
-      },
-      {
-        "command": "jungleKit.styleCheck",
-        "title": "Jungle Kit: Check Coding Style"
-      },
-      {
-        "command": "jungleKit.duplicateCheck",
-        "title": "Jungle Kit: Check Duplicate Code"
-      },
-      {
-        "command": "jungleKit.mergePreview",
-        "title": "Jungle Kit: Merge Preview"
-      },
-      {
-        "command": "jungleKit.pullAndPush",
-        "title": "Jungle Kit: Pull & Push"
-      },
-      {
-        "command": "jungleKit.undoLastCommit",
-        "title": "Jungle Kit: Undo Last Commit"
-      },
-      {
-        "command": "jungleKit.addLocalNote",
-        "title": "Jungle Kit: Add Local Note"
-      },
-      {
-        "command": "jungleKit.generatePRTemplate",
-        "title": "Jungle Kit: Generate PR Template"
-      },
-      {
-        "command": "jungleKit.updateProgress",
-        "title": "Jungle Kit: Update My Progress"
+        "title": "프로젝트 초기화"
       },
       {
         "command": "jungleKit.validateEnv",
-        "title": "Jungle Kit: Validate Environment"
+        "title": "환경 검증"
       },
       {
-        "command": "jungleKit.aiReview",
-        "title": "Jungle Kit: AI Code Review"
+        "command": "jungleKit.styleCheck",
+        "title": "코딩 스타일 검사"
       },
       {
-        "command": "jungleKit.analyzePanic",
-        "title": "Jungle Kit: Analyze Kernel Panic"
+        "command": "jungleKit.addTodo",
+        "title": "TODO 추가"
       },
       {
-        "command": "jungleKit.explainTestFailure",
-        "title": "Jungle Kit: Explain Test Failure"
+        "command": "jungleKit.addBookmark",
+        "title": "북마크 추가"
+      },
+      {
+        "command": "jungleKit.addReviewPoint",
+        "title": "리뷰 추가"
+      },
+      {
+        "command": "jungleKit.addWarning",
+        "title": "경고 추가"
+      },
+      {
+        "command": "jungleKit.addBreakpoint",
+        "title": "브레이크포인트 추가"
+      },
+      {
+        "command": "jungleKit.pullAndPush",
+        "title": "Pull & Push"
       },
       {
         "command": "jungleKit.generateCommitMessage",
-        "title": "Jungle Kit: Generate Commit Message"
+        "title": "커밋 메시지 생성"
+      },
+      {
+        "command": "jungleKit.createPR",
+        "title": "PR 만들기"
       },
       {
         "command": "jungleKit.setApiKey",
-        "title": "Jungle Kit: Set OpenAI API Key"
+        "title": "OpenAI API 키 등록"
       },
       {
         "command": "jungleKit.removeApiKey",
-        "title": "Jungle Kit: Remove OpenAI API Key"
+        "title": "OpenAI API 키 삭제"
+      },
+      {
+        "command": "jungleKit.undoLastCommit",
+        "title": "마지막 커밋 되돌리기"
+      },
+      {
+        "command": "jungleKit.resolveTagInline",
+        "title": "삭제",
+        "icon": "$(close)"
+      },
+      {
+        "command": "jungleKit.addTagAtCursor",
+        "title": "태그 추가",
+        "icon": "$(add)"
+      },
+      {
+        "command": "jungleKit.refreshTags",
+        "title": "태그 새로고침",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "jungleKit.toggleTagView",
+        "title": "보기 전환",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "jungleKit.clearAllTags",
+        "title": "모든 태그 삭제",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "jungleKit.clearFileTags",
+        "title": "파일 태그 삭제",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "jungleKit.editTag",
+        "title": "수정",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "jungleKit.collapseTags",
+        "title": "모두 접기",
+        "icon": "$(collapse-all)"
+      },
+      {
+        "command": "jungleKit.searchTags",
+        "title": "태그 검색",
+        "icon": "$(search)"
+      },
+      {
+        "command": "jungleKit.goToTag",
+        "title": "태그로 이동"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "jungleKit",
-          "title": "Jungle Dev Kit",
+          "title": "Annotation",
           "icon": "resources/icon.svg"
         }
       ]
@@ -113,60 +161,35 @@
     "views": {
       "jungleKit": [
         {
-          "id": "jungleKit.gitGuide",
-          "name": "Git Guide"
-        },
-        {
-          "id": "jungleKit.teamProgress",
-          "name": "Team Progress"
-        },
-        {
-          "id": "jungleKit.reviewHistory",
-          "name": "Review History"
+          "id": "jungleKit.tags",
+          "name": "Explorer"
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "jungleKit.tags",
+        "contents": "등록된 어노테이션이 없습니다.\n\n코드에 태그 주석을 작성하면 자동으로 수집됩니다.\n\n`@todo` — 구현 예정 항목\n`@bookmark` — 핵심 로직 위치 표시\n`@review` — 코드 리뷰 포인트\n`@warn` — 위험 영역 경고 (컴파일 에러 시 자동 생성)\n`@breakpoint` — 디버그 중단점 + 조사식 자동 등록\n`@local` — 개인 메모 (사이드바 미표시)\n\n[태그 추가](command:jungleKit.addTagAtCursor)\n\n모든 태그는 git diff에서 자동 제외됩니다."
+      }
+    ],
     "configuration": {
-      "title": "Jungle Dev Kit",
+      "title": "Annotation",
       "properties": {
         "jungleKit.project": {
           "type": "string",
           "default": "pintos",
-          "enum": [
-            "pintos",
-            "xv6",
-            "custom"
-          ],
+          "enum": ["pintos", "xv6", "custom"],
           "description": "Target OS project type"
-        },
-        "jungleKit.pullReminder.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable automatic pull reminders"
-        },
-        "jungleKit.pullReminder.intervalMinutes": {
-          "type": "number",
-          "default": 30,
-          "description": "Background fetch interval in minutes"
-        },
-        "jungleKit.branchManager.protectedBranches": {
-          "type": "array",
-          "default": [
-            "main",
-            "dev",
-            "master"
-          ],
-          "description": "Branches protected from force push"
         },
         "jungleKit.style.autoCreateClangFormat": {
           "type": "boolean",
           "default": true,
-          "description": "Auto-create .clang-format if missing"
+          "description": "Auto-create .clang-format in .jungle-kit/styles/ if missing"
         },
-        "jungleKit.duplicateDetector.minTokens": {
+        "jungleKit.sync.intervalMinutes": {
           "type": "number",
-          "default": 50,
-          "description": "Minimum token count to consider as duplicate"
+          "default": 5,
+          "description": "Background fetch interval in minutes (Shadow Diff)"
         },
         "jungleKit.localComments.prefix": {
           "type": "string",
@@ -175,27 +198,46 @@
         },
         "jungleKit.ai.model": {
           "type": "string",
-          "default": "gpt-4o",
-          "enum": [
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4-turbo"
-          ],
+          "default": "gpt-4o-mini",
+          "enum": ["gpt-4o", "gpt-4o-mini"],
           "description": "OpenAI model for AI features"
         }
       }
     },
+    "submenus": [
+      {
+        "id": "jungleKit.submenu",
+        "label": "Annotation"
+      }
+    ],
     "menus": {
       "editor/context": [
         {
-          "command": "jungleKit.addLocalNote",
-          "group": "jungleKit@1",
+          "submenu": "jungleKit.submenu",
+          "group": "z_jungleKit",
           "when": "editorTextFocus"
+        }
+      ],
+      "jungleKit.submenu": [
+        {
+          "command": "jungleKit.addTodo",
+          "group": "tag@1"
         },
         {
-          "command": "jungleKit.aiReview",
-          "group": "jungleKit@2",
-          "when": "editorTextFocus"
+          "command": "jungleKit.addBookmark",
+          "group": "tag@2"
+        },
+        {
+          "command": "jungleKit.addReviewPoint",
+          "group": "tag@3"
+        },
+        {
+          "command": "jungleKit.addWarning",
+          "group": "tag@4"
+        },
+        {
+          "command": "jungleKit.addBreakpoint",
+          "group": "tag@5"
         }
       ],
       "scm/title": [
@@ -203,6 +245,70 @@
           "command": "jungleKit.generateCommitMessage",
           "group": "navigation",
           "when": "scmProvider == git"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "jungleKit.addTagAtCursor",
+          "when": "view == jungleKit.tags",
+          "group": "navigation@1"
+        },
+        {
+          "command": "jungleKit.searchTags",
+          "when": "view == jungleKit.tags",
+          "group": "navigation@2"
+        },
+        {
+          "command": "jungleKit.refreshTags",
+          "when": "view == jungleKit.tags",
+          "group": "navigation@3"
+        },
+        {
+          "command": "jungleKit.toggleTagView",
+          "when": "view == jungleKit.tags",
+          "group": "navigation@4"
+        },
+        {
+          "command": "jungleKit.clearAllTags",
+          "when": "view == jungleKit.tags",
+          "group": "navigation@5"
+        },
+        {
+          "command": "jungleKit.collapseTags",
+          "when": "view == jungleKit.tags",
+          "group": "navigation@6"
+        },
+        {
+          "command": "jungleKit.createPR",
+          "when": "view == jungleKit.tags",
+          "group": "actions@1"
+        },
+        {
+          "command": "jungleKit.generateCommitMessage",
+          "when": "view == jungleKit.tags",
+          "group": "actions@2"
+        },
+        {
+          "command": "jungleKit.pullAndPush",
+          "when": "view == jungleKit.tags",
+          "group": "actions@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "jungleKit.editTag",
+          "when": "viewItem =~ /^tag-/",
+          "group": "inline@1"
+        },
+        {
+          "command": "jungleKit.resolveTagInline",
+          "when": "viewItem =~ /^tag-/",
+          "group": "inline@2"
+        },
+        {
+          "command": "jungleKit.clearFileTags",
+          "when": "viewItem =~ /^tagFile-/",
+          "group": "inline"
         }
       ]
     }

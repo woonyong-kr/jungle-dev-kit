@@ -87,13 +87,10 @@ export class EnvironmentValidator {
 	private showResults (results: CheckResult[]): void {
 		const failed = results.filter ((r) => !r.passed);
 		if (failed.length === 0) {
-			vscode.window.showInformationMessage (
-				'[Jungle Kit] Environment OK - all checks passed'
-			);
 			return;
 		}
 
-		const channel = vscode.window.createOutputChannel ('Jungle Kit: Environment');
+		const channel = vscode.window.createOutputChannel ('Annotation: Environment');
 		channel.clear ();
 		channel.appendLine ('=== Environment Validation ===\n');
 		for (const r of results) {
@@ -104,9 +101,5 @@ export class EnvironmentValidator {
 			}
 		}
 		channel.show ();
-
-		vscode.window.showWarningMessage (
-			`[Jungle Kit] Environment: ${failed.length} issues found. See output for details.`
-		);
 	}
 }

@@ -19,7 +19,7 @@ IndentCaseLabels: false
 IndentGotoLabels: false
 NamespaceIndentation: None
 ColumnLimit: 79
-AlwaysBreakAfterReturnType: TopLevel
+AlwaysBreakAfterReturnType: TopLevelDefinitions
 AlwaysBreakAfterDefinitionReturnType: TopLevel
 BreakBeforeBraces: Custom
 BraceWrapping:
@@ -60,6 +60,7 @@ KeepEmptyLinesAtTheStartOfBlocks: false
 export class StyleEnforcer {
 	private config: ConfigManager;
 	private diagnostics: vscode.DiagnosticCollection;
+	private clangFormatPath: string = '';
 
 	constructor (config: ConfigManager) {
 		this.config = config;
@@ -69,32 +70,40 @@ export class StyleEnforcer {
 	}
 
 	async activate (context: vscode.ExtensionContext): Promise<void> {
-		// Auto-create .clang-format if missing
+		// Store .clang-format in .jungle-kit/styles/ (not workspace root)
 		const root = this.config.getWorkspaceRoot ();
 		if (!root) {return;}
 
-		const clangFormatPath = path.join (root, '.clang-format');
+		const stylesDir = path.join (root, '.jungle-kit', 'styles');
+		const clangFormatPath = path.join (stylesDir, '.clang-format');
 		const vscodeSetting = vscode.workspace.getConfiguration ('jungleKit');
 
 		if (
 			vscodeSetting.get<boolean> ('style.autoCreateClangFormat', true) &&
 			!fs.existsSync (clangFormatPath)
 		) {
+			if (!fs.existsSync (stylesDir)) {
+				fs.mkdirSync (stylesDir, { recursive: true });
+			}
 			fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
-			vscode.window.showInformationMessage (
-				'Jungle Kit: .clang-format created (PintOS GNU style)'
+			console.log (
+				'[Annotation] .jungle-kit/styles/.clang-format 생성'
 			);
 		}
+		this.clangFormatPath = clangFormatPath;
 
-		// Ensure formatOnSave is enabled for C files
-		const cConfig = vscode.workspace.getConfiguration ('[c]');
-		const editorConfig = vscode.workspace.getConfiguration ('editor');
-		if (!editorConfig.get<boolean> ('formatOnSave')) {
-			await editorConfig.update (
-				'formatOnSave',
-				true,
-				vscode.ConfigurationTarget.Workspace
-			);
+		// Ensure formatOnSave is enabled for C/C++ files
+		// Use language-override sections in workspace settings
+		const wsConfig = vscode.workspace.getConfiguration (undefined, null);
+		const cOverride = wsConfig.get<Record<string, any>> ('[c]') || {};
+		if (!cOverride['editor.formatOnSave']) {
+			await wsConfig.update ('[c]', { ...cOverride, 'editor.formatOnSave': true },
+				vscode.ConfigurationTarget.Workspace);
+		}
+		const cppOverride = wsConfig.get<Record<string, any>> ('[cpp]') || {};
+		if (!cppOverride['editor.formatOnSave']) {
+			await wsConfig.update ('[cpp]', { ...cppOverride, 'editor.formatOnSave': true },
+				vscode.ConfigurationTarget.Workspace);
 		}
 
 		// Watch for file saves to run style check
@@ -124,8 +133,11 @@ export class StyleEnforcer {
 		}
 
 		try {
-			const { stdout } = await execAsync (
-				`clang-format --dry-run --Werror "${doc.uri.fsPath}" 2>&1`,
+			const styleFlag = this.clangFormatPath
+				? `--style=file:${this.clangFormatPath}`
+				: '';
+			await execAsync (
+				`clang-format --dry-run --Werror ${styleFlag} "${doc.uri.fsPath}"`,
 				{ cwd: this.config.getWorkspaceRoot () }
 			);
 			// No output = no violations
