@@ -5,9 +5,6 @@ import * as fs from 'fs';
 /** git diff 대상 확장자 (shell glob) — 프로젝트 전역에서 사용 */
 export const DIFF_FILE_EXTENSIONS = "'*.c' '*.h'";
 
-/** DIFF_FILE_EXTENSIONS 에 대응하는 정규식 (파일 경로 매칭용) */
-export const DIFF_FILE_RE = /\.[ch]$/;
-
 /** AI diff 절삭 한도 (bytes) */
 export const AI_DIFF_TRUNCATE_LIMIT = 4000;
 
@@ -124,21 +121,7 @@ export class ConfigManager {
 		console.log ('[Annotation] initialized: .jungle-kit/ created');
 	}
 
-	loadConvention (): ConventionConfig {
-		const configPath = path.join (this.configDir, 'config.json');
-		if (fs.existsSync (configPath)) {
-			try {
-				const raw = fs.readFileSync (configPath, 'utf-8');
-				const config = JSON.parse (raw) as JungleKitConfig;
-				return { ...DEFAULT_CONVENTION, ...config.convention };
-			} catch {
-				return DEFAULT_CONVENTION;
-			}
-		}
-		return DEFAULT_CONVENTION;
-	}
-
-	loadEnvConfig (): EnvConfig {
+loadEnvConfig (): EnvConfig {
 		const configPath = path.join (this.configDir, 'config.json');
 		if (fs.existsSync (configPath)) {
 			try {

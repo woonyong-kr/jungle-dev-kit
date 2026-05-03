@@ -245,12 +245,7 @@
           "default": 5,
           "description": "Background fetch interval in minutes (Shadow Diff)"
         },
-        "jungleKit.localComments.prefix": {
-          "type": "string",
-          "default": "@note",
-          "description": "Prefix for local-only comments (e.g. // @note)"
-        },
-        "jungleKit.ai.model": {
+"jungleKit.ai.model": {
           "type": "string",
           "default": "gpt-4o-mini",
           "enum": ["gpt-4o", "gpt-4o-mini"],
