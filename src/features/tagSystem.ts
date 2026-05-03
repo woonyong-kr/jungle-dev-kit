@@ -1843,16 +1843,36 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const opts = { cwd: root, stdio: 'ignore' as const };
 
 		try {
-			const cleanScript = path.join (root, '.jungle-kit', 'scripts', 'clean-local.sh');
-			const smudgeScript = path.join (root, '.jungle-kit', 'scripts', 'smudge-local.sh');
-
-			if (fs.existsSync (cleanScript) && fs.existsSync (smudgeScript)) {
-				execSync (`git config filter.jungle-local.clean "bash ${cleanScript}"`, opts);
-				execSync (`git config filter.jungle-local.smudge "bash ${smudgeScript}"`, opts);
-			} else {
-				execSync (`git config filter.jungle-local.clean "sed -E '/(\\/\\/|\\* |^\\/\\*|\\*\\/).*@(todo|bookmark|review|warn|breakpoint|note|region|endregion)([[:space:]]|$)/d' || true"`, opts);
-				execSync (`git config filter.jungle-local.smudge cat`, opts);
+			const scriptsDir = path.join (root, '.jungle-kit', 'scripts');
+			if (!fs.existsSync (scriptsDir)) {
+				fs.mkdirSync (scriptsDir, { recursive: true });
 			}
+
+			const cleanScript = path.join (scriptsDir, 'clean-local.sh');
+			const smudgeScript = path.join (scriptsDir, 'smudge-local.sh');
+
+			// awk 기반 필터: 멀티라인 블록 주석 전체 제거
+			// 규칙 1: // @tag … (단일 줄) → 삭제
+			// 규칙 2: /* @tag … */ (한 줄 블록) → 삭제
+			// 규칙 3: /* @tag … (여러 줄 시작) → skip 모드, */ 만날 때까지 전부 삭제
+			const tags = 'todo|bookmark|review|warn|breakpoint|note|region|endregion';
+			const awkLines = [
+				'#!/bin/bash',
+				"awk '",
+				'BEGIN{s=0}',
+				`/\\/\\/[[:space:]]*@(${tags})([[:space:]]|$)/{next}`,
+				`/\\/\\*[[:space:]]*@(${tags})([[:space:]]|$)/&&/\\*\\//{next}`,
+				`/\\/\\*[[:space:]]*@(${tags})([[:space:]]|$)/{s=1;next}`,
+				's&&/\\*\\//{s=0;next}',
+				's{next}',
+				'{print}',
+				"' || true",
+			];
+			fs.writeFileSync (cleanScript, awkLines.join ('\n') + '\n', { mode: 0o755 });
+			fs.writeFileSync (smudgeScript, '#!/bin/bash\ncat\n', { mode: 0o755 });
+
+			execSync (`git config filter.jungle-local.clean "bash ${cleanScript}"`, opts);
+			execSync (`git config filter.jungle-local.smudge "bash ${smudgeScript}"`, opts);
 
 			const gaPath = path.join (root, '.gitattributes');
 			const filterLine = '*.c filter=jungle-local';
