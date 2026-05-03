@@ -127,6 +127,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private annotations: Annotation[] = [];
 	private dataFilePath: string = '';
 	private decorationTypes: Map<AnnotationType, vscode.TextEditorDecorationType> = new Map ();
+	private highlightDecTypes: Map<AnnotationType, vscode.TextEditorDecorationType> = new Map ();
 	private _lastKnownHead: string | null = null;
 	private _groupByFile = false;
 	private _scanTimer: NodeJS.Timeout | null = null;
@@ -463,7 +464,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			const iconUri = vscode.Uri.joinPath (
 				this.context.extensionUri, 'resources', 'icons', `${type}.svg`
 			);
-			const dec = vscode.window.createTextEditorDecorationType ({
+			// 첫 줄 전용: gutter 아이콘 + 배경
+			const gutterDec = vscode.window.createTextEditorDecorationType ({
 				gutterIconPath: iconUri,
 				gutterIconSize: '90%',
 				color: TAG_TEXT_COLORS[type],
@@ -473,8 +475,18 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				isWholeLine: true,
 				fontWeight: 'bold',
 			});
-			this.decorationTypes.set (type, dec);
-			this.context.subscriptions.push (dec);
+			this.decorationTypes.set (type, gutterDec);
+			this.context.subscriptions.push (gutterDec);
+
+			// 나머지 줄 전용: 배경만 (아이콘 없음)
+			const highlightDec = vscode.window.createTextEditorDecorationType ({
+				color: TAG_TEXT_COLORS[type],
+				backgroundColor: TAG_BG_COLORS[type],
+				isWholeLine: true,
+				fontWeight: 'bold',
+			});
+			this.highlightDecTypes.set (type, highlightDec);
+			this.context.subscriptions.push (highlightDec);
 		}
 	}
 
@@ -489,18 +501,19 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const relativePath = vscode.workspace.asRelativePath (editor.document.uri);
 		const fileAnns = this.annotations.filter ((a) => a.file === relativePath);
 
-		const grouped: Record<string, vscode.DecorationOptions[]> = {};
+		const gutterGrouped: Record<string, vscode.DecorationOptions[]> = {};
+		const highlightGrouped: Record<string, vscode.DecorationOptions[]> = {};
 		for (const type of ALL_TAG_TYPES) {
-			grouped[type] = [];
+			gutterGrouped[type] = [];
+			highlightGrouped[type] = [];
 		}
 
 		for (const ann of fileAnns) {
-			const options = grouped[ann.type];
-			if (!options) { continue; }
+			if (!gutterGrouped[ann.type]) { continue; }
 			if (ann.line >= editor.document.lineCount) { continue; }
 
 			const endLine = Math.min (ann.lineEnd ?? ann.line, editor.document.lineCount - 1);
-			const endLineText = editor.document.lineAt (endLine);
+			const firstLineText = editor.document.lineAt (ann.line);
 
 			const hoverLines = [
 				`**@${ann.type}** ${ann.displayLabel || ann.content}`,
@@ -509,15 +522,29 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			if (ann.commitHash) {
 				hoverLines.push (`커밋: \`${ann.commitHash.substring (0, 7)}\``);
 			}
+			const hoverMsg = new vscode.MarkdownString (hoverLines.join ('\n\n'));
 
-			options.push ({
-				range: new vscode.Range (ann.line, 0, endLine, endLineText.text.length),
-				hoverMessage: new vscode.MarkdownString (hoverLines.join ('\n\n')),
+			// 첫 줄: gutter 아이콘 + 배경
+			gutterGrouped[ann.type].push ({
+				range: new vscode.Range (ann.line, 0, ann.line, firstLineText.text.length),
+				hoverMessage: hoverMsg,
 			});
+
+			// 나머지 줄: 배경만 (아이콘 없음)
+			if (endLine > ann.line) {
+				const endLineText = editor.document.lineAt (endLine);
+				highlightGrouped[ann.type].push ({
+					range: new vscode.Range (ann.line + 1, 0, endLine, endLineText.text.length),
+					hoverMessage: hoverMsg,
+				});
+			}
 		}
 
 		for (const [type, dec] of this.decorationTypes.entries ()) {
-			editor.setDecorations (dec, grouped[type] || []);
+			editor.setDecorations (dec, gutterGrouped[type] || []);
+		}
+		for (const [type, dec] of this.highlightDecTypes.entries ()) {
+			editor.setDecorations (dec, highlightGrouped[type] || []);
 		}
 	}
 
