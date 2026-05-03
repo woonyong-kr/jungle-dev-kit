@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { GitUtils } from '../utils/gitUtils';
-import { ConfigManager } from '../utils/configManager';
+import { ConfigManager, DIFF_FILE_EXTENSIONS } from '../utils/configManager';
 
 const execAsync = promisify (exec);
 
@@ -154,7 +154,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 			try {
 				// Get diff between current branch and remote branch (only C/H files)
 				const { stdout: diffOutput } = await execAsync (
-					`git diff ${currentBranch}...${remoteBranch} -- '*.c' '*.h' 2>/dev/null`,
+					`git diff ${currentBranch}...${remoteBranch} -- ${DIFF_FILE_EXTENSIONS} 2>/dev/null`,
 					{ cwd: root, maxBuffer: MAX_BUFFER }
 				);
 

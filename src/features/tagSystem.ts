@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { exec as execCb, execSync } from 'child_process';
 import { promisify } from 'util';
-import { ConfigManager } from '../utils/configManager';
+import { ConfigManager, DIFF_FILE_EXTENSIONS, DIFF_FILE_RE } from '../utils/configManager';
 import { APIKeyManager } from '../utils/apiKeyManager';
 
 const execAsync = promisify (execCb);
@@ -17,7 +17,6 @@ const MAX_WORKSPACE_SCAN_FILES = 500;        // 워크스페이스 스캔 최대
 const MAX_BLOCK_COMMENT_LINES = 30;          // 블록 주석 최대 스캔 줄 수
 const WORKSPACE_SCAN_GLOB = '**/*.{c,h}';    // 스캔 대상 파일 패턴
 const WORKSPACE_SCAN_EXCLUDE = '**/build/**'; // 스캔 제외 패턴
-const DIFF_FILE_EXTENSIONS = "'*.c' '*.h'";  // git diff 대상 확장자
 const AI_MAX_CONTEXT_LINES = 10;             // AI 설명 생성 시 전후 컨텍스트 줄 수
 
 /**
@@ -1309,7 +1308,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				for (const uri of event.uris) {
 					if (uri.scheme !== 'file') { continue; }
 					const filePath = uri.fsPath;
-					if (!/\.[ch]$/.test (filePath)) { continue; }
+					if (!DIFF_FILE_RE.test (filePath)) { continue; }
 					this._warnPendingUris.add (uri.toString ());
 				}
 
@@ -1416,7 +1415,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		try {
 			const { stdout: diffOutput } = await execAsync (
-				`git diff ${oldHead}..${newHead} --unified=0 --diff-filter=AM -- '*.c' '*.h'`,
+				`git diff ${oldHead}..${newHead} --unified=0 --diff-filter=AM -- ${DIFF_FILE_EXTENSIONS}`,
 				{ cwd: root, maxBuffer: MAX_BUFFER }
 			);
 
@@ -1542,7 +1541,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				try {
 					// 선택된 커밋의 diff 가져오기 (부모 대비 추가된 코드만)
 					const { stdout: diffOutput } = await execAsync (
-						`git diff ${commitHash}^..${commitHash} --unified=0 --diff-filter=AM -- '*.c' '*.h'`,
+						`git diff ${commitHash}^..${commitHash} --unified=0 --diff-filter=AM -- ${DIFF_FILE_EXTENSIONS}`,
 						{ cwd: root, maxBuffer: MAX_BUFFER }
 					);
 

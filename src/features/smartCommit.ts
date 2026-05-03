@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ConfigManager } from '../utils/configManager';
+import { ConfigManager, AI_DIFF_TRUNCATE_LIMIT } from '../utils/configManager';
 import { APIKeyManager } from '../utils/apiKeyManager';
 import { GitUtils } from '../utils/gitUtils';
 
@@ -50,8 +50,8 @@ export class SmartCommit {
 			.getConfiguration ('jungleKit')
 			.get<string> ('ai.model', 'gpt-4o-mini');
 
-		const trimmedDiff = diff.length > 4000
-			? diff.substring (0, 4000) + '\n... (truncated)'
+		const trimmedDiff = diff.length > AI_DIFF_TRUNCATE_LIMIT
+			? diff.substring (0, AI_DIFF_TRUNCATE_LIMIT) + '\n... (truncated)'
 			: diff;
 
 		const OpenAI = (await import ('openai')).default;

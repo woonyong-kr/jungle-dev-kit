@@ -5,7 +5,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { GitUtils } from '../utils/gitUtils';
 import { APIKeyManager } from '../utils/apiKeyManager';
-import { ConfigManager } from '../utils/configManager';
+import { ConfigManager, PR_DIFF_TRUNCATE_LIMIT } from '../utils/configManager';
 import { TagSystem } from './tagSystem';
 
 const execAsync = promisify (exec);
@@ -176,7 +176,7 @@ ${commitsSummary}
 ${reviewSummary}
 
 === Diff ===
-${(diff || '').substring (0, 6000)}`,
+${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 					},
 				],
 			});

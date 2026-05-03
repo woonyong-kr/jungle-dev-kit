@@ -2,6 +2,18 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 
+/** git diff 대상 확장자 (shell glob) — 프로젝트 전역에서 사용 */
+export const DIFF_FILE_EXTENSIONS = "'*.c' '*.h'";
+
+/** DIFF_FILE_EXTENSIONS 에 대응하는 정규식 (파일 경로 매칭용) */
+export const DIFF_FILE_RE = /\.[ch]$/;
+
+/** AI diff 절삭 한도 (bytes) */
+export const AI_DIFF_TRUNCATE_LIMIT = 4000;
+
+/** PR diff 절삭 한도 (bytes) */
+export const PR_DIFF_TRUNCATE_LIMIT = 6000;
+
 export interface JungleKitConfig {
 	project: 'pintos' | 'xv6' | 'custom';
 	convention: ConventionConfig;

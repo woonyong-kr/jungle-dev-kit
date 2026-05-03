@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { DIFF_FILE_EXTENSIONS } from './configManager';
 
 const execAsync = promisify (exec);
 
@@ -9,16 +10,6 @@ const MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
 /** shell 인자에 사용 가능한 안전한 git ref 문자만 허용 */
 function sanitizeRef (ref: string): string {
 	return ref.replace (/[^a-zA-Z0-9_\-\/.~^@{}]/g, '');
-}
-
-export interface BranchInfo {
-	name: string;
-	isCurrent: boolean;
-	lastCommitDate: string;
-	lastCommitMessage: string;
-	lastCommitAuthor: string;
-	aheadOf: number;
-	behindOf: number;
 }
 
 export interface DiffFile {
@@ -85,7 +76,7 @@ export class GitUtils {
 	async getChangedFunctions (base: string): Promise<string[]> {
 		const current = await this.getCurrentBranch ();
 		const output = await this.run (
-			`git diff -U0 ${sanitizeRef (base)}..${sanitizeRef (current)} -- '*.c' '*.h' | grep -E '^@@.*@@' | sed 's/.*@@ //'`
+			`git diff -U0 ${sanitizeRef (base)}..${sanitizeRef (current)} -- ${DIFF_FILE_EXTENSIONS} | grep -E '^@@.*@@' | sed 's/.*@@ //'`
 		);
 		return output
 			.split ('\n')
@@ -188,6 +179,11 @@ export class GitUtils {
 		await this.run ('git fetch --all --prune');
 	}
 
+	/**
+	 * git diff --numstat 출력을 파싱한다.
+	 * NOTE: --numstat 은 상태(A/M/D/R)를 제공하지 않으므로 기본값 'M'을 사용한다.
+	 * 정확한 상태가 필요하면 --name-status 를 별도로 호출해서 병합해야 한다.
+	 */
 	private parseNumstat (output: string): DiffFile[] {
 		return output
 			.split ('\n')
