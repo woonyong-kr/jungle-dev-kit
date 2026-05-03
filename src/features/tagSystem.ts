@@ -499,7 +499,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			if (!options) { continue; }
 			if (ann.line >= editor.document.lineCount) { continue; }
 
-			const line = editor.document.lineAt (ann.line);
+			const endLine = Math.min (ann.lineEnd ?? ann.line, editor.document.lineCount - 1);
+			const endLineText = editor.document.lineAt (endLine);
 
 			const hoverLines = [
 				`**@${ann.type}** ${ann.displayLabel || ann.content}`,
@@ -510,7 +511,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 
 			options.push ({
-				range: new vscode.Range (ann.line, 0, ann.line, line.text.length),
+				range: new vscode.Range (ann.line, 0, endLine, endLineText.text.length),
 				hoverMessage: new vscode.MarkdownString (hoverLines.join ('\n\n')),
 			});
 		}
