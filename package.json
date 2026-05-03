@@ -2,7 +2,7 @@
   "name": "jungle-dev-kit",
   "displayName": "Annotation",
   "description": "코드 주석 태그로 팀 협업 — @todo, @bookmark, @review, @warn, @breakpoint, @note, @region 태그를 사이드바에서 관리하고, git diff에서 자동 제외",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "publisher": "woonyong",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -223,7 +223,7 @@
     "viewsWelcome": [
       {
         "view": "jungleKit.tags",
-        "contents": "등록된 어노테이션이 없습니다.\n\n코드에 태그 주석을 작성하면 자동으로 수집됩니다.\n\n`@todo` — 구현 예정 항목\n`@bookmark` — 핵심 로직 위치 표시\n`@review` — 코드 리뷰 포인트\n`@warn` — 위험 영역 경고 (컴파일 에러 시 자동 생성)\n`@breakpoint` — 디버그 중단점 + 조사식 자동 등록\n`@note` — 개인 메모 (사이드바 미표시)\n`@region`/`@endregion` — 코드 접기 영역\n\n[태그 추가](command:jungleKit.addTagAtCursor)\n\n모든 태그는 git diff에서 자동 제외됩니다."
+        "contents": "등록된 어노테이션이 없습니다.\n\n코드에 태그 주석을 작성하면 자동으로 수집됩니다.\n\n`@todo` — 구현 예정 항목\n`@bookmark` — 핵심 로직 위치 표시\n`@review` — 코드 리뷰 포인트\n`@warn` — 런타임 에러 기록\n`@breakpoint` — 디버그 중단점 + 조사식 자동 등록\n`@note` — 개인 메모 (사이드바 미표시)\n`@region`/`@endregion` — 코드 접기 영역\n\n[태그 추가](command:jungleKit.addTagAtCursor)\n\n모든 태그는 git diff에서 자동 제외됩니다."
       }
     ],
     "configuration": {
