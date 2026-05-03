@@ -1807,7 +1807,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const model = vscode.workspace.getConfiguration ('jungleKit').get<string> ('ai.model') || 'gpt-4o-mini';
 
 		try {
-			const OpenAI = (await import ('openai')).default;
+			let OpenAI: any;
+			try { OpenAI = (await import ('openai')).default; } catch { return ''; }
 			const client = new OpenAI ({ apiKey: key });
 
 			const response = await client.chat.completions.create ({
@@ -2479,7 +2480,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
     }
   });
 
-  render();
+  try { render(); } catch(e) {
+    document.getElementById('content').innerHTML = '<p style="color:var(--vscode-errorForeground);padding:20px;">렌더링 오류: ' + e.message + '</p>';
+  }
 </script>
 </body>
 </html>`;
@@ -2499,7 +2502,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		} else if (platform === 'win32') {
 			configDir = path.join (process.env.APPDATA || '', 'Code', 'User');
 		} else {
-			configDir = path.join (homeDir, '.config', 'Code', 'User');
+			// Remote (Docker/SSH) 환경: .vscode-server 우선, 없으면 로컬 .config
+			const remoteDir = path.join (homeDir, '.vscode-server', 'data', 'Machine');
+			const localDir = path.join (homeDir, '.config', 'Code', 'User');
+			configDir = fs.existsSync (remoteDir) ? remoteDir : localDir;
 		}
 
 		const keybindingsPath = path.join (configDir, 'keybindings.json');

@@ -133,7 +133,13 @@ export class PRPanel {
 		}
 
 		try {
-			const OpenAI = (await import ('openai')).default;
+			let OpenAI: any;
+			try {
+				OpenAI = (await import ('openai')).default;
+			} catch {
+				panel.webview.postMessage ({ command: 'error', text: 'openai 모듈을 찾을 수 없습니다. 익스텐션을 재설치하세요.' });
+				return;
+			}
 			const client = new OpenAI ({ apiKey });
 
 			const model = vscode.workspace

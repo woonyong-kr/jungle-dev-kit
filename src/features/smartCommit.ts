@@ -54,7 +54,12 @@ export class SmartCommit {
 			? diff.substring (0, AI_DIFF_TRUNCATE_LIMIT) + '\n... (truncated)'
 			: diff;
 
-		const OpenAI = (await import ('openai')).default;
+		let OpenAI: any;
+		try {
+			OpenAI = (await import ('openai')).default;
+		} catch {
+			throw new Error ('openai 모듈을 찾을 수 없습니다. 익스텐션을 재설치하세요.');
+		}
 		const client = new OpenAI ({ apiKey });
 
 		const completion = await client.chat.completions.create ({
