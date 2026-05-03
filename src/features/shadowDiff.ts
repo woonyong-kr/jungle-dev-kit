@@ -1,6 +1,10 @@
 import * as vscode from 'vscode';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { GitUtils } from '../utils/gitUtils';
 import { ConfigManager } from '../utils/configManager';
+
+const execAsync = promisify (exec);
 
 /**
  * Shadow Diff
@@ -91,9 +95,6 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 				await vscode.window.withProgress (
 					{ location: vscode.ProgressLocation.Notification, title: 'Pull 중...' },
 					async () => {
-						const { exec } = require ('child_process');
-						const { promisify } = require ('util');
-						const execAsync = promisify (exec);
 						const root = this.config.getWorkspaceRoot ();
 						await execAsync ('git pull --rebase', { cwd: root });
 					}
@@ -106,9 +107,6 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 				await vscode.window.withProgress (
 					{ location: vscode.ProgressLocation.Notification, title: 'Push 중...' },
 					async () => {
-						const { exec } = require ('child_process');
-						const { promisify } = require ('util');
-						const execAsync = promisify (exec);
 						const root = this.config.getWorkspaceRoot ();
 						await execAsync (`git push origin ${branch}`, { cwd: root });
 					}
@@ -136,9 +134,6 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 	}
 
 	private async analyzeRemoteBranches (): Promise<void> {
-		const { exec } = require ('child_process');
-		const { promisify } = require ('util');
-		const execAsync = promisify (exec);
 		const root = this.config.getWorkspaceRoot ();
 		if (!root) {return;}
 
@@ -313,10 +308,6 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 		if (!root) {return lines;}
 
 		try {
-			const { exec } = require ('child_process');
-			const { promisify } = require ('util');
-			const execAsync = promisify (exec);
-
 			// Combine staged + unstaged diffs for the file
 			const { stdout: stagedDiff } = await execAsync (
 				`git diff --cached -U0 -- "${relativePath}" 2>/dev/null`,

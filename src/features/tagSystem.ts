@@ -1,8 +1,12 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { exec as execCb, execSync } from 'child_process';
+import { promisify } from 'util';
 import { ConfigManager } from '../utils/configManager';
 import { APIKeyManager } from '../utils/apiKeyManager';
+
+const execAsync = promisify (execCb);
 
 /**
  * Annotation System (Phase 1 + Phase 2)
@@ -22,10 +26,10 @@ import { APIKeyManager } from '../utils/apiKeyManager';
  * 2. 주석은 파일에 그대로 유지 (편집/삭제 자유)
  * 3. gutter 아이콘 + 배경 하이라이트 표시
  * 4. git clean filter로 커밋 시 자동 제거 → diff에 노출 안 됨
- * 5. @local 주석도 동일하게 파일 유지 + diff 제외 (사이드바엔 미표시)
+ * 5. @note 주석도 동일하게 파일 유지 + diff 제외 (사이드바엔 미표시)
  */
 
-type AnnotationType = 'todo' | 'bookmark' | 'review' | 'warn' | 'breakpoint';
+type AnnotationType = 'todo' | 'bookmark' | 'review' | 'warn' | 'breakpoint' | 'region' | 'endregion';
 
 interface Annotation {
 	id: string;
@@ -47,20 +51,42 @@ interface AnnotationsData {
 	annotations: Annotation[];
 }
 
+interface ShortcutEntry {
+	id: string;
+	label: string;
+	command: string;
+	key: string;
+	mac?: string;
+}
+
 const TAG_COLORS: Record<AnnotationType, string> = {
 	todo: '#66BB6A',
 	bookmark: '#4FC3F7',
 	review: '#FFD54F',
 	warn: '#EF5350',
 	breakpoint: '#FF7043',
+	region: '#B39DDB',
+	endregion: '#B39DDB',
 };
 
 const TAG_BG_COLORS: Record<AnnotationType, string> = {
-	todo: 'rgba(102, 187, 106, 0.08)',
-	bookmark: 'rgba(79, 195, 247, 0.08)',
-	review: 'rgba(255, 213, 79, 0.08)',
-	warn: 'rgba(239, 83, 80, 0.08)',
-	breakpoint: 'rgba(255, 112, 67, 0.12)',
+	todo: 'rgba(102, 187, 106, 0.12)',
+	bookmark: 'rgba(79, 195, 247, 0.10)',
+	review: 'rgba(255, 213, 79, 0.12)',
+	warn: 'rgba(239, 83, 80, 0.12)',
+	breakpoint: 'rgba(255, 112, 67, 0.14)',
+	region: 'rgba(179, 157, 219, 0.10)',
+	endregion: 'rgba(179, 157, 219, 0.10)',
+};
+
+const TAG_TEXT_COLORS: Record<AnnotationType, string> = {
+	todo: '#66BB6A',
+	bookmark: '#4FC3F7',
+	review: '#FFD54F',
+	warn: '#EF5350',
+	breakpoint: '#FF7043',
+	region: '#B39DDB',
+	endregion: '#B39DDB',
 };
 
 const TAG_LABELS: Record<AnnotationType, string> = {
@@ -69,14 +95,16 @@ const TAG_LABELS: Record<AnnotationType, string> = {
 	review: '리뷰',
 	warn: '경고',
 	breakpoint: '브레이크포인트',
+	region: '리전',
+	endregion: '리전 끝',
 };
 
-const ALL_TAG_TYPES: AnnotationType[] = ['bookmark', 'todo', 'review', 'warn', 'breakpoint'];
+const ALL_TAG_TYPES: AnnotationType[] = ['bookmark', 'todo', 'review', 'warn', 'breakpoint', 'region', 'endregion'];
 
 // 주석 패턴 (파일 스캔용)
-const SINGLE_LINE_RE = /^(\s*)\/\/\s*@(bookmark|todo|review|warn|breakpoint)\s+(.+)$/;
-const BLOCK_SINGLE_RE = /^(\s*)\/\*\s*@(bookmark|todo|review|warn|breakpoint)\s+(.+?)\s*\*\/$/;
-const BLOCK_START_RE = /^(\s*)\/\*\s*@(bookmark|todo|review|warn|breakpoint)\b(.*)$/;
+const SINGLE_LINE_RE = /^(\s*)\/\/\s*@(bookmark|todo|review|warn|breakpoint|region|endregion)(?:\s+(.+))?$/;
+const BLOCK_SINGLE_RE = /^(\s*)\/\*\s*@(bookmark|todo|review|warn|breakpoint|region|endregion)(?:\s+(.+?))?\s*\*\/$/;
+const BLOCK_START_RE = /^(\s*)\/\*\s*@(bookmark|todo|review|warn|breakpoint|region|endregion)\b(.*)$/;
 
 export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.TreeDragAndDropController<TagTreeItem> {
 	readonly dropMimeTypes = ['application/vnd.code.tree.jungleKit.tags'];
@@ -116,7 +144,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		this.registerAutoWarn (context);
 		this.registerBreakpointSync (context);
 
-		// git clean filter 등록 (모든 태그 + @local)
+		// git clean filter 등록 (모든 태그 + @note)
 		this.setupAnnotationFilter (root);
 
 		// Store initial HEAD
@@ -126,11 +154,20 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		this.scanVisibleEditors ();
 		this._onDidChangeTreeData.fire ();
 
-		// 워크스페이스 전체에서 @breakpoint 어노테이션 스캔 (열려있지 않은 파일 포함)
-		await this.scanWorkspaceBreakpoints ();
+		// 워크스페이스 전체에서 모든 어노테이션 스캔 (열려있지 않은 파일 포함)
+		await this.scanWorkspaceAnnotations ();
 
 		// 스캔 완료 후 브레이크포인트 설정
 		this.syncBreakpoints ();
+
+		// @region/@endregion 접기 지원
+		this.registerRegionFolding (context);
+
+		// 저장된 단축키 설정 자동 적용 (사용자가 한 번이라도 설정한 경우에만)
+		const kbPath = this.getKeybindingsFilePath ();
+		if (kbPath && fs.existsSync (kbPath)) {
+			this.applyKeybindings ();
+		}
 	}
 
 	// ──────────────────────────────────────────
@@ -157,8 +194,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 		const data: AnnotationsData = {
 			version: 2,
-			// 가상 항목은 영속 저장하지 않음 (세션 전용)
-			annotations: this.annotations.filter ((a) => !a.virtual),
+			// 가상 @warn은 세션 전용 (진단 해결 시 자동 제거), 나머지(auto-review 등)는 영속 저장
+			annotations: this.annotations.filter ((a) => !(a.virtual && a.type === 'warn')),
 		};
 		fs.writeFileSync (this.dataFilePath, JSON.stringify (data, null, 2));
 	}
@@ -172,11 +209,13 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 		if (fs.existsSync (jkGitignore)) {
 			const content = fs.readFileSync (jkGitignore, 'utf-8');
-			if (!content.includes ('annotations.json')) {
-				fs.appendFileSync (jkGitignore, '\nannotations.json\n');
+			const entries = ['annotations.json', 'keybindings.json'];
+			const missing = entries.filter ((e) => !content.includes (e));
+			if (missing.length > 0) {
+				fs.appendFileSync (jkGitignore, '\n' + missing.join ('\n') + '\n');
 			}
 		} else {
-			fs.writeFileSync (jkGitignore, 'annotations.json\n');
+			fs.writeFileSync (jkGitignore, 'annotations.json\nkeybindings.json\n');
 		}
 
 		// 프로젝트 루트 .gitignore — 익스텐션 생성 파일 자동 제외
@@ -244,12 +283,17 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		if (doc.uri.scheme !== 'file') { return; }
 		const relativePath = vscode.workspace.asRelativePath (doc.uri);
 
-		// 기존 해당 파일의 annotation에서 displayLabel 맵 보존
+		// 기존 해당 파일의 annotation에서 displayLabel, sortOrder 맵 보존
 		const labelMap = new Map<string, string> ();
+		const orderMap = new Map<string, number> ();
 		for (const ann of this.annotations.filter ((a) => a.file === relativePath)) {
+			const key = `${ann.type}:${ann.line}`;
 			if (ann.displayLabel) {
 				// key: type+line (줄번호 기반이라 주석 내용이 바뀌어도 displayLabel 유지)
-				labelMap.set (`${ann.type}:${ann.line}`, ann.displayLabel);
+				labelMap.set (key, ann.displayLabel);
+			}
+			if (ann.sortOrder !== undefined) {
+				orderMap.set (key, ann.sortOrder);
 			}
 		}
 
@@ -267,10 +311,13 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const found = this.parseAnnotationsFromDoc (doc, relativePath);
 
 		for (const ann of found) {
-			// displayLabel 복원
+			// displayLabel, sortOrder 복원
 			const key = `${ann.type}:${ann.line}`;
 			if (labelMap.has (key)) {
 				ann.displayLabel = labelMap.get (key)!;
+			}
+			if (orderMap.has (key)) {
+				ann.sortOrder = orderMap.get (key)!;
 			}
 			this.annotations.push (ann);
 		}
@@ -300,7 +347,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			const singleMatch = lineText.match (SINGLE_LINE_RE);
 			if (singleMatch) {
 				type = singleMatch[2] as AnnotationType;
-				content = singleMatch[3].trim ();
+				content = (singleMatch[3] || '').trim ();
 			}
 
 			// /* @tag content */
@@ -308,7 +355,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				const blockMatch = lineText.match (BLOCK_SINGLE_RE);
 				if (blockMatch) {
 					type = blockMatch[2] as AnnotationType;
-					content = blockMatch[3].trim ();
+					content = (blockMatch[3] || '').trim ();
 				}
 			}
 
@@ -324,8 +371,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					if (firstLineContent) {
 						contentLines.push (firstLineContent.replace (/,\s*$/, ','));
 					}
-					// 다음 줄들에서 내용 수집 (* 으로 시작하는 줄)
-					for (let j = i + 1; j < doc.lineCount; j++) {
+					// 다음 줄들에서 내용 수집 (* 으로 시작하는 줄, 최대 30줄)
+					const maxBlockEnd = Math.min (i + 30, doc.lineCount);
+					for (let j = i + 1; j < maxBlockEnd; j++) {
 						const nextLine = doc.lineAt (j).text.trim ();
 						if (nextLine.endsWith ('*/')) {
 							const last = nextLine.replace (/^\*\s?/, '').replace (/\s*\*\/$/, '').trim ();
@@ -344,7 +392,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				}
 			}
 
-			if (!type || !content) { continue; }
+			if (!type) { continue; }
+			if (!content) { content = type; }
 
 			results.push ({
 				id: this.generateId (),
@@ -371,21 +420,23 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	}
 
 	/**
-	 * 워크스페이스 전체에서 @breakpoint 어노테이션이 있는 파일을 검색하고 스캔한다.
-	 * 에디터에 열려있지 않은 파일도 포함하여 브레이크포인트와 조사식이 누락되지 않게 한다.
+	 * 워크스페이스 전체에서 모든 어노테이션 태그가 있는 파일을 검색하고 스캔한다.
+	 * 에디터에 열려있지 않은 파일도 포함하여 사이드바에 누락 없이 표시한다.
 	 */
-	private async scanWorkspaceBreakpoints (): Promise<void> {
-		const files = await vscode.workspace.findFiles ('**/*.{c,h}', '**/build/**', 200);
+	private async scanWorkspaceAnnotations (forceRescan = false): Promise<void> {
+		const files = await vscode.workspace.findFiles ('**/*.{c,h}', '**/build/**', 500);
+		const tagPattern = /@(bookmark|todo|review|warn|breakpoint|region|endregion)\b/;
+
 		for (const fileUri of files) {
 			const relativePath = vscode.workspace.asRelativePath (fileUri);
-			// 이미 스캔된 파일이면서 @breakpoint가 있으면 건너뛰기
-			if (this.annotations.some ((a) => a.file === relativePath && a.type === 'breakpoint')) {
+			// forceRescan이 아니면, 이미 스캔 완료된 파일 건너뛰기
+			if (!forceRescan && this.annotations.some ((a) => a.file === relativePath && !a.virtual)) {
 				continue;
 			}
 			try {
 				const doc = await vscode.workspace.openTextDocument (fileUri);
 				const text = doc.getText ();
-				if (text.includes ('@breakpoint')) {
+				if (tagPattern.test (text)) {
 					this.scanDocument (doc);
 				}
 			} catch {
@@ -406,10 +457,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			const dec = vscode.window.createTextEditorDecorationType ({
 				gutterIconPath: iconUri,
 				gutterIconSize: '90%',
+				color: TAG_TEXT_COLORS[type],
 				backgroundColor: TAG_BG_COLORS[type],
 				overviewRulerColor: TAG_COLORS[type],
 				overviewRulerLane: vscode.OverviewRulerLane.Left,
 				isWholeLine: true,
+				fontWeight: 'bold',
 			});
 			this.decorationTypes.set (type, dec);
 			this.context.subscriptions.push (dec);
@@ -468,13 +521,15 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		const line = editor.selection.active.line;
 		const content = await vscode.window.showInputBox ({
-			prompt: `${TAG_LABELS[type]} 내용을 입력하세요`,
+			prompt: `${TAG_LABELS[type]} 내용을 입력하세요 (빈칸 가능)`,
 		});
-		if (!content) { return; }
+		if (content === undefined) { return; } // ESC 취소만 중단, 빈 문자열은 허용
 
 		// 파일에 실제 주석 삽입
 		const indent = editor.document.lineAt (line).text.match (/^(\s*)/)?.[1] || '';
-		const commentText = `${indent}/* @${type} ${content} */\n`;
+		const commentText = content
+			? `${indent}/* @${type} ${content} */\n`
+			: `${indent}/* @${type} */\n`;
 
 		const edit = new vscode.WorkspaceEdit ();
 		edit.insert (editor.document.uri, new vscode.Position (line, 0), commentText);
@@ -517,9 +572,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				if (ann.line < doc.lineCount) {
 					const lineText = doc.lineAt (ann.line).text;
 					// 해당 줄이 실제로 annotation 주석인지 확인
-					if (lineText.match (SINGLE_LINE_RE) || lineText.match (BLOCK_SINGLE_RE)) {
+					if (lineText.match (SINGLE_LINE_RE) || lineText.match (BLOCK_SINGLE_RE) || lineText.match (BLOCK_START_RE)) {
 						const edit = new vscode.WorkspaceEdit ();
-						edit.delete (uri, new vscode.Range (ann.line, 0, ann.line + 1, 0));
+						const endLine = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount);
+						edit.delete (uri, new vscode.Range (ann.line, 0, endLine, 0));
 						await vscode.workspace.applyEdit (edit);
 					}
 				}
@@ -581,25 +637,29 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const root = this.config.getWorkspaceRoot ();
 		if (!root) { return; }
 
-		// 파일별 그룹핑, 역순 삭제
-		const byFile = new Map<string, number[]> ();
+		// 파일별 그룹핑 (annotation 객체 전체 보존 — lineEnd 필요)
+		const byFile = new Map<string, Annotation[]> ();
 		for (const ann of anns) {
-			const lines = byFile.get (ann.file) || [];
-			lines.push (ann.line);
-			byFile.set (ann.file, lines);
+			const list = byFile.get (ann.file) || [];
+			list.push (ann);
+			byFile.set (ann.file, list);
 		}
 
-		for (const [file, lines] of byFile) {
+		for (const [file, fileAnns] of byFile) {
 			const uri = vscode.Uri.file (path.join (root, file));
 			try {
 				const doc = await vscode.workspace.openTextDocument (uri);
 				const edit = new vscode.WorkspaceEdit ();
-				const sorted = [...new Set (lines)].sort ((a, b) => b - a);
-				for (const line of sorted) {
-					if (line >= doc.lineCount) { continue; }
-					const lineText = doc.lineAt (line).text;
-					if (lineText.match (SINGLE_LINE_RE) || lineText.match (BLOCK_SINGLE_RE)) {
-						edit.delete (uri, new vscode.Range (line, 0, line + 1, 0));
+				// 역순 삭제 (뒤에서부터 지워야 줄번호 밀림 방지)
+				const sorted = [...fileAnns].sort ((a, b) => b.line - a.line);
+				const deleted = new Set<number> ();
+				for (const ann of sorted) {
+					if (deleted.has (ann.line) || ann.line >= doc.lineCount) { continue; }
+					const lineText = doc.lineAt (ann.line).text;
+					if (lineText.match (SINGLE_LINE_RE) || lineText.match (BLOCK_SINGLE_RE) || lineText.match (BLOCK_START_RE)) {
+						const endLine = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount);
+						edit.delete (uri, new vscode.Range (ann.line, 0, endLine, 0));
+						for (let l = ann.line; l < endLine; l++) { deleted.add (l); }
 					}
 				}
 				await vscode.workspace.applyEdit (edit);
@@ -611,8 +671,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	// Toolbar
 	// ──────────────────────────────────────────
 
-	refresh (): void {
+	async refresh (): Promise<void> {
 		this.scanVisibleEditors ();
+		await this.scanWorkspaceAnnotations (true);
 		this._onDidChangeTreeData.fire ();
 	}
 
@@ -646,6 +707,109 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 
 		this._onDidChangeTreeData.fire ();
+	}
+
+	// ──────────────────────────────────────────
+	// Tag Navigation (Alt+[ / Alt+])
+	// sidebarMode=true: 전체 태그 순회, false: 현재 파일 내 태그 순회
+	// ──────────────────────────────────────────
+
+	private _navIndex = -1;
+
+	navigateTag (direction: 'next' | 'prev', sidebarMode = false): void {
+		// 필터 적용된 태그 목록
+		let allTags = [...this.annotations];
+		if (this.filterType) {
+			allTags = allTags.filter ((a) => a.type === this.filterType);
+		}
+		if (this.filterText) {
+			const q = this.filterText.toLowerCase ();
+			allTags = allTags.filter ((a) =>
+				(a.displayLabel || a.content).toLowerCase ().includes (q) ||
+				a.file.toLowerCase ().includes (q)
+			);
+		}
+
+		if (allTags.length === 0) {
+			vscode.window.showInformationMessage ('태그가 없습니다.');
+			return;
+		}
+
+		if (sidebarMode) {
+			// 전체 태그를 파일/줄 기준으로 순회
+			allTags.sort ((a, b) => a.file.localeCompare (b.file) || a.line - b.line);
+
+			// _navIndex 범위 보정 (태그 삭제 시 범위 초과 방지)
+			if (this._navIndex >= allTags.length) {
+				this._navIndex = allTags.length - 1;
+			}
+
+			if (direction === 'next') {
+				this._navIndex = (this._navIndex + 1) % allTags.length;
+			} else {
+				this._navIndex = this._navIndex <= 0 ? allTags.length - 1 : this._navIndex - 1;
+			}
+
+			const target = allTags[this._navIndex];
+			if (target) {
+				this.openAnnotationInEditor (target);
+			}
+		} else {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor) {
+				// 에디터가 없으면 전체 모드로 fallback
+				this.navigateTag (direction, true);
+				return;
+			}
+
+			const relativePath = vscode.workspace.asRelativePath (editor.document.uri);
+			let tags = allTags.filter ((a) => a.file === relativePath);
+
+			if (tags.length === 0) {
+				vscode.window.showInformationMessage ('현재 파일에 태그가 없습니다.');
+				return;
+			}
+
+			tags.sort ((a, b) => a.line - b.line);
+
+			const cursorLine = editor.selection.active.line;
+			let target: Annotation | undefined;
+
+			if (direction === 'next') {
+				target = tags.find ((a) => a.line > cursorLine);
+				if (!target) { target = tags[0]; }
+			} else {
+				const above = tags.filter ((a) => a.line < cursorLine);
+				target = above.length > 0 ? above[above.length - 1] : tags[tags.length - 1];
+			}
+
+			if (target) {
+				const pos = new vscode.Position (target.line, 0);
+				editor.selection = new vscode.Selection (pos, pos);
+				editor.revealRange (
+					new vscode.Range (pos, pos),
+					vscode.TextEditorRevealType.InCenter
+				);
+			}
+		}
+	}
+
+	private async openAnnotationInEditor (ann: Annotation): Promise<void> {
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (!root) { return; }
+		const uri = vscode.Uri.file (path.join (root, ann.file));
+		try {
+			const doc = await vscode.workspace.openTextDocument (uri);
+			const editor = await vscode.window.showTextDocument (doc, { preserveFocus: false });
+			const pos = new vscode.Position (ann.line, 0);
+			editor.selection = new vscode.Selection (pos, pos);
+			editor.revealRange (
+				new vscode.Range (pos, pos),
+				vscode.TextEditorRevealType.InCenter
+			);
+		} catch {
+			vscode.window.showWarningMessage (`[Annotation] 파일을 열 수 없습니다: ${ann.file}`);
+		}
 	}
 
 	// ──────────────────────────────────────────
@@ -750,17 +914,35 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		if (draggedAnns[0].type !== targetAnn.type) { return; }
 
 		const type = targetAnn.type;
-		const typeAnns = this.annotations
-			.filter ((a) => a.type === type)
-			.sort ((a, b) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
 
-		// 드래그 항목 제거 후 대상 위치에 삽입
-		const remaining = typeAnns.filter ((a) => !draggedIds.includes (a.id));
-		const targetIdx = remaining.findIndex ((a) => a.id === targetAnn.id);
-		remaining.splice (targetIdx, 0, ...draggedAnns);
-
-		// sortOrder 재정렬
-		remaining.forEach ((a, i) => { a.sortOrder = i; });
+		// 단일 항목 드래그: 위치 교환 (swap)
+		if (draggedAnns.length === 1) {
+			const dragAnn = draggedAnns[0];
+			// 둘 다 sortOrder가 없으면 먼저 전체 그룹에 순서 부여
+			const typeAnns = this.annotations
+				.filter ((a) => a.type === type)
+				.sort ((a, b) => {
+					const oa = a.sortOrder ?? Infinity;
+					const ob = b.sortOrder ?? Infinity;
+					if (oa !== Infinity || ob !== Infinity) { return oa - ob; }
+					return a.file.localeCompare (b.file) || a.line - b.line;
+				});
+			if (dragAnn.sortOrder === undefined || targetAnn.sortOrder === undefined) {
+				typeAnns.forEach ((a, i) => { a.sortOrder = i; });
+			}
+			const tmpOrder = dragAnn.sortOrder!;
+			dragAnn.sortOrder = targetAnn.sortOrder!;
+			targetAnn.sortOrder = tmpOrder;
+		} else {
+			// 다중 선택: 기존 insert 방식
+			const typeAnns = this.annotations
+				.filter ((a) => a.type === type)
+				.sort ((a, b) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
+			const remaining = typeAnns.filter ((a) => !draggedIds.includes (a.id));
+			const targetIdx = remaining.findIndex ((a) => a.id === targetAnn.id);
+			remaining.splice (targetIdx, 0, ...draggedAnns);
+			remaining.forEach ((a, i) => { a.sortOrder = i; });
+		}
 
 		this.saveAnnotations ();
 		this._onDidChangeTreeData.fire ();
@@ -844,6 +1026,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				`@${type}`,
 				vscode.TreeItemCollapsibleState.Expanded
 			);
+			item.description = `(${count})`;
 			item.iconPath = vscode.Uri.joinPath (
 				this.context.extensionUri, 'resources', 'icons', `${type}.svg`
 			);
@@ -867,7 +1050,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				path.basename (file),
 				vscode.TreeItemCollapsibleState.Expanded
 			);
-			item.description = path.dirname (file) !== '.' ? path.dirname (file) : '';
+			const dir = path.dirname (file) !== '.' ? path.dirname (file) + ' ' : '';
+			item.description = `${dir}(${anns.length})`;
 			item.resourceUri = vscode.Uri.parse (`jungle-tag:///${file}`);
 			item.iconPath = vscode.ThemeIcon.File;
 			item.contextValue = `tagFile-${file}`;
@@ -952,9 +1136,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private _debugBreakpoints: vscode.SourceBreakpoint[] = [];
 
 	private registerBreakpointSync (context: vscode.ExtensionContext): void {
-		// 디버그 세션 시작 시 조사식만 등록 (브레이크포인트는 이미 설정됨)
+		// 디버그 세션 시작 시 브레이크포인트 재등록 + 조사식 등록
 		context.subscriptions.push (
 			vscode.debug.onDidStartDebugSession (async () => {
+				this.syncBreakpoints ();
+				// 조사식은 이전 세션 기록을 초기화하고 새로 등록
+				await this.context.workspaceState.update ('annotation.registeredWatch', undefined);
 				await this.syncWatchExpressions ();
 			})
 		);
@@ -978,7 +1165,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	 */
 	syncBreakpoints (): void {
 		const root = this.config.getWorkspaceRoot ();
-		if (!root) { return; }
+		if (!root) {
+			console.log ('[Annotation] syncBreakpoints: root가 없음');
+			return;
+		}
 
 		// 기존 자동 브레이크포인트 제거
 		if (this._debugBreakpoints.length > 0) {
@@ -987,25 +1177,42 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 
 		const bpAnnotations = this.annotations.filter ((a) => a.type === 'breakpoint');
+		console.log (`[Annotation] syncBreakpoints: @breakpoint ${bpAnnotations.length}개 발견`);
 		if (bpAnnotations.length === 0) { return; }
 
 		const newBreakpoints: vscode.SourceBreakpoint[] = [];
 
 		for (const ann of bpAnnotations) {
 			const filePath = path.join (root, ann.file);
-			if (!fs.existsSync (filePath)) { continue; }
+			const exists = fs.existsSync (filePath);
+			console.log (`[Annotation] BP: ${ann.file}:${ann.line} → ${filePath} (exists=${exists})`);
+			if (!exists) { continue; }
 
 			const uri = vscode.Uri.file (filePath);
-			// 여러 줄 블록이면 블록 끝 다음 줄, 단일 줄이면 다음 줄
-			const bpLine = (ann.lineEnd ?? ann.line) + 1;
+			// 주석·빈 줄을 건너뛰고 실제 실행 가능한 코드 라인을 찾는다
+			const fileLines = fs.readFileSync (filePath, 'utf-8').split ('\n');
+			const startLine = (ann.lineEnd ?? ann.line) + 1;
+			let bpLine = startLine;
+			for (let i = startLine; i < Math.min (startLine + 10, fileLines.length); i++) {
+				const trimmed = fileLines[i]?.trim () ?? '';
+				if (trimmed === '' || trimmed.startsWith ('/*') || trimmed.startsWith ('//') ||
+					trimmed.startsWith ('*') || trimmed === '*/') {
+					continue;
+				}
+				bpLine = i;
+				break;
+			}
+			console.log (`[Annotation] BP line: ${startLine} → ${bpLine} (${fileLines[bpLine]?.trim ()?.substring (0, 40)})`);
 			const location = new vscode.Location (uri, new vscode.Position (bpLine, 0));
 			const bp = new vscode.SourceBreakpoint (location, true);
 			newBreakpoints.push (bp);
 		}
 
+		console.log (`[Annotation] syncBreakpoints: ${newBreakpoints.length}개 등록 시도`);
 		if (newBreakpoints.length > 0) {
 			vscode.debug.addBreakpoints (newBreakpoints);
 			this._debugBreakpoints = newBreakpoints;
+			console.log (`[Annotation] syncBreakpoints: ${newBreakpoints.length}개 등록 완료`);
 		}
 	}
 
@@ -1015,7 +1222,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	 * 에디터 깜빡임·클립보드 오염 없이 등록한다.
 	 */
 	private async syncWatchExpressions (): Promise<void> {
+		console.log ('[Annotation] syncWatchExpressions 호출됨');
 		const bpAnnotations = this.annotations.filter ((a) => a.type === 'breakpoint');
+		console.log (`[Annotation] syncWatch: @breakpoint ${bpAnnotations.length}개`);
 		if (bpAnnotations.length === 0) { return; }
 
 		const watchExpressions: string[] = [];
@@ -1192,10 +1401,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const root = this.config.getWorkspaceRoot ();
 		if (!root) { return; }
 
-		const { exec: execCb } = require ('child_process');
-		const { promisify } = require ('util');
-		const execAsync = promisify (execCb);
-
 		try {
 			const { stdout: diffOutput } = await execAsync (
 				`git diff ${oldHead}..${newHead} --unified=0 --diff-filter=AM -- '*.c' '*.h'`,
@@ -1249,10 +1454,11 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 
 			if (addedCount > 0) {
+				this.saveAnnotations ();
 				this.updateAllDecorations ();
 				this._onDidChangeTreeData.fire ();
 				console.log (
-					`[Annotation] @review ${addedCount}개 가상 생성 (${newHead.substring (0, 7)} — ${commitAuthor})`
+					`[Annotation] @review ${addedCount}개 자동 생성 (${newHead.substring (0, 7)} — ${commitAuthor})`
 				);
 			}
 		} catch (err) {
@@ -1403,7 +1609,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const model = vscode.workspace.getConfiguration ('jungleKit').get<string> ('ai.model') || 'gpt-4o-mini';
 
 		try {
-			const OpenAI = require ('openai');
+			const OpenAI = (await import ('openai')).default;
 			const client = new OpenAI ({ apiKey: key });
 
 			const response = await client.chat.completions.create ({
@@ -1431,11 +1637,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	}
 
 	// ──────────────────────────────────────────
-	// Git clean filter — 모든 태그 + @local diff 제외
+	// Git clean filter — 모든 태그 + @note diff 제외
 	// ──────────────────────────────────────────
 
 	private setupAnnotationFilter (root: string): void {
-		const { execSync } = require ('child_process');
 		const opts = { cwd: root, stdio: 'ignore' as const };
 
 		try {
@@ -1446,7 +1651,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				execSync (`git config filter.jungle-local.clean "bash ${cleanScript}"`, opts);
 				execSync (`git config filter.jungle-local.smudge "bash ${smudgeScript}"`, opts);
 			} else {
-				execSync (`git config filter.jungle-local.clean "sed -E '/(\\/\\/|\\* |^\\/\\*|\\*\\/).*@(todo|bookmark|review|warn|breakpoint|local)([[:space:]]|$)/d' || true"`, opts);
+				execSync (`git config filter.jungle-local.clean "sed -E '/(\\/\\/|\\* |^\\/\\*|\\*\\/).*@(todo|bookmark|review|warn|breakpoint|note|region|endregion)([[:space:]]|$)/d' || true"`, opts);
 				execSync (`git config filter.jungle-local.smudge cat`, opts);
 			}
 
@@ -1476,13 +1681,51 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	}
 
 	// ──────────────────────────────────────────
+	// @region/@endregion 코드 접기
+	// ──────────────────────────────────────────
+
+	private registerRegionFolding (context: vscode.ExtensionContext): void {
+		const provider: vscode.FoldingRangeProvider = {
+			provideFoldingRanges (doc: vscode.TextDocument): vscode.FoldingRange[] {
+				const ranges: vscode.FoldingRange[] = [];
+				const stack: { line: number; name: string }[] = [];
+				const regionEnd = /@endregion\b/;
+				const regionStart = /@region\b/;
+
+				for (let i = 0; i < doc.lineCount; i++) {
+					const text = doc.lineAt (i).text;
+					if (regionEnd.test (text)) {
+						const top = stack.pop ();
+						if (top) {
+							ranges.push (new vscode.FoldingRange (top.line, i, vscode.FoldingRangeKind.Region));
+						}
+					} else if (regionStart.test (text)) {
+						const name = text.replace (/.*@region\s*/, '').replace (/\*\/\s*$/, '').trim ();
+						stack.push ({ line: i, name });
+					}
+				}
+				return ranges;
+			},
+		};
+
+		const selector = [
+			{ language: 'c' },
+			{ language: 'cpp' },
+			{ language: 'typescript' },
+			{ language: 'javascript' },
+			{ language: 'python' },
+			{ language: 'java' },
+		];
+		context.subscriptions.push (
+			vscode.languages.registerFoldingRangeProvider (selector, provider)
+		);
+	}
+
+	// ──────────────────────────────────────────
 	// Utilities
 	// ──────────────────────────────────────────
 
 	private async getAuthorName (): Promise<string> {
-		const { exec: execCb } = require ('child_process');
-		const { promisify } = require ('util');
-		const execAsync = promisify (execCb);
 		const root = this.config.getWorkspaceRoot ();
 		try {
 			const { stdout } = await execAsync ('git config user.name', { cwd: root });
@@ -1493,9 +1736,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	}
 
 	private async getCurrentCommitHash (): Promise<string | null> {
-		const { exec: execCb } = require ('child_process');
-		const { promisify } = require ('util');
-		const execAsync = promisify (execCb);
 		const root = this.config.getWorkspaceRoot ();
 		try {
 			const { stdout } = await execAsync ('git rev-parse HEAD', { cwd: root });
@@ -1507,6 +1747,242 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 	private generateId (): string {
 		return `${Date.now ()}-${Math.random ().toString (36).substring (2, 8)}`;
+	}
+
+	// ──────────────────────────────────────────
+	// Shortcut Settings (단축키 설정)
+	// ──────────────────────────────────────────
+
+	private static readonly DEFAULT_SHORTCUTS: ShortcutEntry[] = [
+		// 디버그 단축키
+		{ id: 'debug.start',       label: '디버그 시작',              command: 'workbench.action.debug.start',      key: 'f5',          mac: 'f5' },
+		{ id: 'debug.stepOver',    label: '디버그 Step Over',         command: 'workbench.action.debug.stepOver',   key: 'f6',          mac: 'f6' },
+		{ id: 'debug.stepInto',    label: '디버그 Step Into',         command: 'workbench.action.debug.stepInto',   key: 'f7',          mac: 'f7' },
+		{ id: 'debug.continue',    label: '디버그 Continue',          command: 'workbench.action.debug.continue',   key: 'f8',          mac: 'f8' },
+		{ id: 'debug.toggleBP',    label: '브레이크포인트 토글',      command: 'editor.debug.action.toggleBreakpoint', key: 'f11',      mac: 'f11' },
+		// 에디터 네비게이션
+		{ id: 'nav.prevEditor',    label: '이전 에디터 탭',           command: 'workbench.action.previousEditor',   key: 'cmd+[',       mac: 'cmd+[' },
+		{ id: 'nav.nextEditor',    label: '다음 에디터 탭',           command: 'workbench.action.nextEditor',       key: 'cmd+]',       mac: 'cmd+]' },
+		// 코드 접기/펼치기
+		{ id: 'fold.fold',         label: '코드 접기',                command: 'editor.fold',                       key: 'cmd+shift+[', mac: 'cmd+shift+[' },
+		{ id: 'fold.unfold',       label: '코드 펼치기',              command: 'editor.unfold',                     key: 'cmd+shift+]', mac: 'cmd+shift+]' },
+		// 유틸리티
+		{ id: 'util.selectAll',    label: '전체 선택',                command: 'editor.action.selectAll',           key: 'alt+a',       mac: 'alt+a' },
+		{ id: 'util.findRefs',     label: '참조 찾기',                command: 'editor.action.referenceSearch.trigger', key: 'alt+f7',  mac: 'alt+f7' },
+		// 태그 네비게이션 (참조용 — package.json keybinding으로 등록, applyKeybindings에서 스킵)
+		{ id: 'annotation.prevTag',    label: '이전 태그로 이동',     command: 'jungleKit.prevTag',                 key: 'alt+[',       mac: 'alt+[' },
+		{ id: 'annotation.nextTag',    label: '다음 태그로 이동',     command: 'jungleKit.nextTag',                 key: 'alt+]',       mac: 'alt+]' },
+	];
+
+	private getKeybindingsFilePath (): string {
+		const root = this.config.getWorkspaceRoot ();
+		if (!root) { return ''; }
+		return path.join (root, '.jungle-kit', 'keybindings.json');
+	}
+
+	private loadShortcutSettings (): ShortcutEntry[] {
+		const filePath = this.getKeybindingsFilePath ();
+		if (!filePath) { return [...TagSystem.DEFAULT_SHORTCUTS]; }
+		try {
+			if (fs.existsSync (filePath)) {
+				const raw = JSON.parse (fs.readFileSync (filePath, 'utf-8'));
+				if (Array.isArray (raw.shortcuts)) {
+					return raw.shortcuts;
+				}
+			}
+		} catch { /* 파싱 실패 시 기본값 사용 */ }
+		return [...TagSystem.DEFAULT_SHORTCUTS];
+	}
+
+	private saveShortcutSettings (shortcuts: ShortcutEntry[]): void {
+		const filePath = this.getKeybindingsFilePath ();
+		if (!filePath) { return; }
+		const dir = path.dirname (filePath);
+		if (!fs.existsSync (dir)) {
+			fs.mkdirSync (dir, { recursive: true });
+		}
+		fs.writeFileSync (filePath, JSON.stringify ({ version: 1, shortcuts }, null, 2));
+	}
+
+	async configureShortcuts (): Promise<void> {
+		const shortcuts = this.loadShortcutSettings ();
+
+		// 그룹별 구분자 삽입
+		const items: vscode.QuickPickItem[] = [];
+		let lastGroup = '';
+		for (const s of shortcuts) {
+			const group = s.id.split ('.')[0];
+			if (group !== lastGroup) {
+				const groupLabels: Record<string, string> = {
+					debug: '디버그', nav: '에디터 네비게이션',
+					fold: '코드 접기/펼치기', util: '유틸리티',
+				};
+				items.push ({
+					label: `$(symbol-folder) ${groupLabels[group] || group}`,
+					kind: vscode.QuickPickItemKind.Separator,
+				});
+				lastGroup = group;
+			}
+			items.push ({
+				label: s.label,
+				description: `현재: ${s.mac || s.key}`,
+				detail: s.command,
+			});
+		}
+
+		items.push ({
+			label: '$(check) 현재 설정 적용',
+			description: 'VS Code 단축키에 반영합니다',
+			detail: '_apply_',
+		});
+
+		items.push ({
+			label: '$(discard) 기본값으로 초기화',
+			description: '모든 단축키를 기본값으로 되돌립니다',
+			detail: '_reset_',
+		});
+
+		const selected = await vscode.window.showQuickPick (items, {
+			placeHolder: '변경할 단축키를 선택하세요',
+			title: 'Annotation 단축키 설정',
+		});
+
+		if (!selected) { return; }
+
+		if (selected.detail === '_apply_') {
+			this.applyKeybindings ();
+			vscode.window.showInformationMessage ('[Annotation] 단축키가 적용되었습니다.');
+			return;
+		}
+
+		if (selected.detail === '_reset_') {
+			this.saveShortcutSettings ([...TagSystem.DEFAULT_SHORTCUTS]);
+			this.applyKeybindings ();
+			vscode.window.showInformationMessage ('[Annotation] 단축키가 기본값으로 초기화되었습니다.');
+			return;
+		}
+
+		// 단축키 변경
+		const entry = shortcuts.find ((s) => s.command === selected.detail);
+		if (!entry) { return; }
+
+		const newKey = await vscode.window.showInputBox ({
+			prompt: `"${entry.label}"의 새 단축키를 입력하세요 (예: ctrl+shift+f5, cmd+k)`,
+			value: entry.mac || entry.key,
+			placeHolder: 'ctrl+shift+f5',
+			validateInput: (value) => {
+				if (!value.trim ()) { return '단축키를 입력하세요.'; }
+				// 기본적인 단축키 형식 검증
+				const parts = value.toLowerCase ().split ('+');
+				const validModifiers = ['ctrl', 'cmd', 'alt', 'shift', 'meta'];
+				const validKeys = parts.filter ((p) => !validModifiers.includes (p));
+				if (validKeys.length !== 1) { return '수식키 + 키 하나 형식으로 입력하세요 (예: alt+f7)'; }
+				return undefined;
+			},
+		});
+
+		if (newKey === undefined) { return; } // ESC
+
+		entry.key = newKey.trim ().toLowerCase ();
+		entry.mac = newKey.trim ().toLowerCase ();
+		this.saveShortcutSettings (shortcuts);
+
+		const apply = await vscode.window.showQuickPick (
+			['예, 지금 적용', '아니요, 나중에'],
+			{ placeHolder: '변경된 단축키를 지금 VS Code에 적용할까요?' }
+		);
+
+		if (apply === '예, 지금 적용') {
+			this.applyKeybindings ();
+			vscode.window.showInformationMessage ('[Annotation] 단축키가 적용되었습니다.');
+		} else {
+			vscode.window.showInformationMessage ('[Annotation] 단축키가 저장되었습니다. 다음 VS Code 시작 시 자동 적용됩니다.');
+		}
+	}
+
+	private applyKeybindings (): void {
+		const shortcuts = this.loadShortcutSettings ();
+		if (shortcuts.length === 0) { return; }
+
+		// VS Code keybindings.json 경로 (macOS / Linux / Windows)
+		let configDir: string;
+		const platform = process.platform;
+		const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+
+		if (platform === 'darwin') {
+			configDir = path.join (homeDir, 'Library', 'Application Support', 'Code', 'User');
+		} else if (platform === 'win32') {
+			configDir = path.join (process.env.APPDATA || '', 'Code', 'User');
+		} else {
+			configDir = path.join (homeDir, '.config', 'Code', 'User');
+		}
+
+		const keybindingsPath = path.join (configDir, 'keybindings.json');
+
+		// 텍스트 기반 안전한 처리 — JSONC를 JSON.parse하지 않음
+		const BEGIN_MARKER = '// >>> Annotation Extension BEGIN';
+		const END_MARKER = '// >>> Annotation Extension END';
+
+		let content = '';
+		try {
+			if (fs.existsSync (keybindingsPath)) {
+				content = fs.readFileSync (keybindingsPath, 'utf-8');
+			}
+		} catch {
+			content = '';
+		}
+
+		// Annotation 블록 제거 (마커 기반)
+		const markerRegex = new RegExp (
+			`\\s*${BEGIN_MARKER.replace (/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${END_MARKER.replace (/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*,?`,
+			'g'
+		);
+		content = content.replace (markerRegex, '');
+
+		// 새 Annotation 블록 생성
+		// jungleKit 커맨드는 package.json keybinding으로 등록되므로 스킵
+		const filtered = shortcuts.filter ((s) => !s.command.startsWith ('jungleKit.'));
+		if (filtered.length === 0) { return; }
+
+		const newEntries = filtered.map ((s) => {
+			const key = platform === 'darwin' ? (s.mac || s.key) : s.key;
+			return `    { "key": ${JSON.stringify (key)}, "command": ${JSON.stringify (s.command)} }`;
+		});
+
+		const annotationBlock = [
+			`    ${BEGIN_MARKER}`,
+			newEntries.join (',\n'),
+			`    ${END_MARKER}`,
+		].join ('\n');
+
+		// keybindings.json이 비어있거나 없는 경우
+		if (!content.trim () || !content.includes ('[')) {
+			content = `[\n${annotationBlock}\n]\n`;
+		} else {
+			// 마지막 ] 앞에 블록 삽입
+			const lastBracket = content.lastIndexOf (']');
+			if (lastBracket === -1) {
+				content = `[\n${annotationBlock}\n]\n`;
+			} else {
+				const before = content.substring (0, lastBracket).trimEnd ();
+				const after = content.substring (lastBracket);
+				// 기존 항목이 있으면 콤마 추가
+				const needsComma = before.trimEnd ().match (/[}\]"'\d]$/);
+				const separator = needsComma ? ',\n' : '\n';
+				content = before + separator + annotationBlock + '\n' + after;
+			}
+		}
+
+		// 저장
+		try {
+			if (!fs.existsSync (configDir)) {
+				fs.mkdirSync (configDir, { recursive: true });
+			}
+			fs.writeFileSync (keybindingsPath, content);
+		} catch (err) {
+			console.error ('[Annotation] keybindings.json 저장 실패:', err);
+			vscode.window.showErrorMessage ('[Annotation] 단축키 적용 실패: keybindings.json에 쓸 수 없습니다.');
+		}
 	}
 }
 

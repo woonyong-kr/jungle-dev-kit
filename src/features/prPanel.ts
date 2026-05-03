@@ -1,8 +1,14 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { GitUtils } from '../utils/gitUtils';
 import { APIKeyManager } from '../utils/apiKeyManager';
 import { ConfigManager } from '../utils/configManager';
 import { TagSystem } from './tagSystem';
+
+const execAsync = promisify (exec);
 
 /**
  * PR Panel
@@ -77,7 +83,7 @@ export class PRPanel {
 		}
 
 		try {
-			const OpenAI = require ('openai');
+			const OpenAI = (await import ('openai')).default;
 			const client = new OpenAI ({ apiKey });
 
 			const model = vscode.workspace
@@ -104,42 +110,7 @@ export class PRPanel {
 				messages: [
 					{
 						role: 'system',
-						content: `당신은 PintOS OS 프로젝트의 시니어 개발자입니다.
-주어진 정보(diff, 커밋 로그, 변경 파일 목록, 리뷰 포인트)를 종합 분석하여
-한국어로 PR 제목과 **상세한** 본문을 생성하세요.
-
-## 제목 규칙
-- 형식: <type>: <한국어 제목>
-- type: feat | fix | refactor | docs | test | chore | style | perf | build
-- 한 줄, 마침표 없이, 변경의 결과를 구체적으로 서술
-- "수정", "변경", "업데이트" 같은 모호한 단어 지양
-- 예: "feat: process_wait에서 자식 프로세스 종료 상태 전달 구현"
-
-## 본문 규칙
-각 섹션을 **구체적으로** 작성하세요. 한 줄짜리 요약은 금지합니다.
-
-## 출력 형식 (정확히 따르세요)
-TITLE: <type>: <한국어 제목>
-BODY:
-## 변경 내용
-- 파일별로 무엇이 바뀌었는지 구체적으로 나열
-- 새로 추가된 함수/구조체/매크로가 있으면 명시
-
-## 변경 이유
-- 이 변경이 필요한 배경과 동기
-- 해결하려는 문제가 무엇인지
-
-## 구현 방법
-- 핵심 로직과 접근 방식을 단계별로 설명
-- 중요한 설계 결정이 있으면 근거 포함
-
-## 주의사항
-- 리뷰어가 특히 봐야 할 부분
-- 사이드 이펙트나 제한사항
-- @review 태그가 있으면 해당 내용 반영
-
-## 테스트
-- 어떻게 검증했는지 또는 검증해야 하는지`,
+						content: this.config.loadConventionFile ('pr-convention.md'),
 					},
 					{
 						role: 'user',
@@ -181,9 +152,6 @@ ${diff.substring (0, 6000)}`,
 		panel: vscode.WebviewPanel,
 		data: { title: string; body: string; base: string; reviewers: string }
 	): Promise<void> {
-		const { exec } = require ('child_process');
-		const { promisify } = require ('util');
-		const execAsync = promisify (exec);
 		const root = this.config.getWorkspaceRoot ();
 
 		if (!root) {
@@ -212,13 +180,11 @@ ${diff.substring (0, 6000)}`,
 
 		// Create PR
 		try {
-			const fs = require ('fs');
-			const pathModule = require ('path');
-			const tempDir = pathModule.join (root, '.jungle-kit');
+			const tempDir = path.join (root, '.jungle-kit');
 
 			// Write title and body to temp files to avoid all shell injection
-			const titleFile = pathModule.join (tempDir, 'pr-title-temp.txt');
-			const bodyFile = pathModule.join (tempDir, 'pr-body-temp.md');
+			const titleFile = path.join (tempDir, 'pr-title-temp.txt');
+			const bodyFile = path.join (tempDir, 'pr-body-temp.md');
 			fs.writeFileSync (titleFile, data.title);
 			fs.writeFileSync (bodyFile, data.body);
 

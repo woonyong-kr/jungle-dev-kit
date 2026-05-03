@@ -1,8 +1,8 @@
 {
   "name": "jungle-dev-kit",
   "displayName": "Annotation",
-  "description": "코드 주석 태그로 팀 협업 — @todo, @bookmark, @review, @warn, @breakpoint, @local 태그를 사이드바에서 관리하고, git diff에서 자동 제외",
-  "version": "0.10.3",
+  "description": "코드 주석 태그로 팀 협업 — @todo, @bookmark, @review, @warn, @breakpoint, @note, @region 태그를 사이드바에서 관리하고, git diff에서 자동 제외",
+  "version": "0.12.0",
   "publisher": "woonyong",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -147,6 +147,55 @@
       {
         "command": "jungleKit.goToTag",
         "title": "태그로 이동"
+      },
+      {
+        "command": "jungleKit.nextTag",
+        "title": "다음 태그로 이동",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "jungleKit.prevTag",
+        "title": "이전 태그로 이동",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "jungleKit.configureShortcuts",
+        "title": "단축키 설정",
+        "icon": "$(keyboard)"
+      },
+      {
+        "command": "jungleKit.nextTagGlobal",
+        "title": "다음 태그로 이동 (전체)"
+      },
+      {
+        "command": "jungleKit.prevTagGlobal",
+        "title": "이전 태그로 이동 (전체)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "jungleKit.nextTag",
+        "key": "alt+]",
+        "mac": "alt+]",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "jungleKit.prevTag",
+        "key": "alt+[",
+        "mac": "alt+[",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "jungleKit.nextTagGlobal",
+        "key": "alt+]",
+        "mac": "alt+]",
+        "when": "focusedView == jungleKit.tags"
+      },
+      {
+        "command": "jungleKit.prevTagGlobal",
+        "key": "alt+[",
+        "mac": "alt+[",
+        "when": "focusedView == jungleKit.tags"
       }
     ],
     "viewsContainers": {
@@ -169,7 +218,7 @@
     "viewsWelcome": [
       {
         "view": "jungleKit.tags",
-        "contents": "등록된 어노테이션이 없습니다.\n\n코드에 태그 주석을 작성하면 자동으로 수집됩니다.\n\n`@todo` — 구현 예정 항목\n`@bookmark` — 핵심 로직 위치 표시\n`@review` — 코드 리뷰 포인트\n`@warn` — 위험 영역 경고 (컴파일 에러 시 자동 생성)\n`@breakpoint` — 디버그 중단점 + 조사식 자동 등록\n`@local` — 개인 메모 (사이드바 미표시)\n\n[태그 추가](command:jungleKit.addTagAtCursor)\n\n모든 태그는 git diff에서 자동 제외됩니다."
+        "contents": "등록된 어노테이션이 없습니다.\n\n코드에 태그 주석을 작성하면 자동으로 수집됩니다.\n\n`@todo` — 구현 예정 항목\n`@bookmark` — 핵심 로직 위치 표시\n`@review` — 코드 리뷰 포인트\n`@warn` — 위험 영역 경고 (컴파일 에러 시 자동 생성)\n`@breakpoint` — 디버그 중단점 + 조사식 자동 등록\n`@note` — 개인 메모 (사이드바 미표시)\n`@region`/`@endregion` — 코드 접기 영역\n\n[태그 추가](command:jungleKit.addTagAtCursor)\n\n모든 태그는 git diff에서 자동 제외됩니다."
       }
     ],
     "configuration": {
@@ -193,8 +242,8 @@
         },
         "jungleKit.localComments.prefix": {
           "type": "string",
-          "default": "@local",
-          "description": "Prefix for local-only comments (e.g. // @local)"
+          "default": "@note",
+          "description": "Prefix for local-only comments (e.g. // @note)"
         },
         "jungleKit.ai.model": {
           "type": "string",
@@ -292,6 +341,11 @@
           "command": "jungleKit.pullAndPush",
           "when": "view == jungleKit.tags",
           "group": "actions@4"
+        },
+        {
+          "command": "jungleKit.configureShortcuts",
+          "when": "view == jungleKit.tags",
+          "group": "settings@1"
         }
       ],
       "view/item/context": [

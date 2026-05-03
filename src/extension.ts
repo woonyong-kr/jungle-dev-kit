@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { StyleEnforcer } from './features/styleEnforcer';
-// LocalComments removed — @local handled by annotation system
+// LocalComments removed — @note handled by annotation system
 import { EnvironmentValidator } from './features/environmentValidator';
 import { SmartCommit } from './features/smartCommit';
 import { TagSystem } from './features/tagSystem';
@@ -61,6 +61,11 @@ export async function activate (context: vscode.ExtensionContext) {
 		['jungleKit.toggleTagView', () => tagSystem.toggleView ()],
 		['jungleKit.clearAllTags', () => tagSystem.clearAllAnnotations ()],
 		['jungleKit.collapseTags', () => vscode.commands.executeCommand ('workbench.actions.treeView.jungleKit.tags.collapseAll')],
+		['jungleKit.nextTag', () => tagSystem.navigateTag ('next')],
+		['jungleKit.prevTag', () => tagSystem.navigateTag ('prev')],
+		['jungleKit.nextTagGlobal', () => tagSystem.navigateTag ('next', true)],
+		['jungleKit.prevTagGlobal', () => tagSystem.navigateTag ('prev', true)],
+		['jungleKit.configureShortcuts', () => tagSystem.configureShortcuts ()],
 		['jungleKit.clearFileTags', (item: any) => {
 			const match = item?.contextValue?.match (/tagFile-(.+)/);
 			if (match) { tagSystem.clearFileAnnotations (match[1]); }

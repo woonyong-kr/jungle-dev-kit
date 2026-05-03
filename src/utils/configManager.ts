@@ -140,6 +140,22 @@ export class ConfigManager {
 		return DEFAULT_ENV;
 	}
 
+	/**
+	 * 익스텐션 번들의 resources/conventions/ 에서 컨벤션 파일을 읽는다.
+	 * 사용자가 파일을 직접 수정하면 AI 프롬프트에 반영된다.
+	 */
+	loadConventionFile (fileName: string): string {
+		const extPath = this.context.extensionPath;
+		const filePath = path.join (extPath, 'resources', 'conventions', fileName);
+
+		try {
+			return fs.readFileSync (filePath, 'utf-8');
+		} catch {
+			console.warn (`[Annotation] convention file not found: ${filePath}`);
+			return '';
+		}
+	}
+
 	private async ensureGitignoreEntry (entry: string): Promise<void> {
 		const root = this.getWorkspaceRoot ();
 		const gitignorePath = path.join (root, '.jungle-kit', '.gitignore');
@@ -153,3 +169,5 @@ export class ConfigManager {
 		}
 	}
 }
+
+
