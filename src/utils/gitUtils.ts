@@ -4,6 +4,13 @@ import { promisify } from 'util';
 
 const execAsync = promisify (exec);
 
+const MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
+
+/** shell 인자에 사용 가능한 안전한 git ref 문자만 허용 */
+function sanitizeRef (ref: string): string {
+	return ref.replace (/[^a-zA-Z0-9_\-\/.~^@{}]/g, '');
+}
+
 export interface BranchInfo {
 	name: string;
 	isCurrent: boolean;
@@ -32,7 +39,7 @@ export class GitUtils {
 		try {
 			const { stdout } = await execAsync (cmd, {
 				cwd: this.cwd,
-				maxBuffer: 1024 * 1024 * 10,
+				maxBuffer: MAX_BUFFER,
 			});
 			return stdout.trim ();
 		} catch (error: any) {
@@ -59,7 +66,7 @@ export class GitUtils {
 
 	async getDiffAgainst (base: string): Promise<string> {
 		const current = await this.getCurrentBranch ();
-		return this.run (`git diff ${base}..${current}`);
+		return this.run (`git diff ${sanitizeRef (base)}..${sanitizeRef (current)}`);
 	}
 
 	async getStagedFiles (): Promise<DiffFile[]> {
@@ -70,7 +77,7 @@ export class GitUtils {
 	async getChangedFiles (base: string): Promise<DiffFile[]> {
 		const current = await this.getCurrentBranch ();
 		const output = await this.run (
-			`git diff --numstat ${base}..${current}`
+			`git diff --numstat ${sanitizeRef (base)}..${sanitizeRef (current)}`
 		);
 		return this.parseNumstat (output);
 	}
@@ -78,7 +85,7 @@ export class GitUtils {
 	async getChangedFunctions (base: string): Promise<string[]> {
 		const current = await this.getCurrentBranch ();
 		const output = await this.run (
-			`git diff -U0 ${base}..${current} -- '*.c' '*.h' | grep -E '^@@.*@@' | sed 's/.*@@ //'`
+			`git diff -U0 ${sanitizeRef (base)}..${sanitizeRef (current)} -- '*.c' '*.h' | grep -E '^@@.*@@' | sed 's/.*@@ //'`
 		);
 		return output
 			.split ('\n')
@@ -91,10 +98,12 @@ export class GitUtils {
 	): Promise<{ ahead: number; behind: number }> {
 		const current = await this.getCurrentBranch ();
 		const output = await this.run (
-			`git rev-list --left-right --count ${base}...${current}`
+			`git rev-list --left-right --count ${sanitizeRef (base)}...${sanitizeRef (current)}`
 		);
-		const [behind, ahead] = output.split ('\t').map (Number);
-		return { ahead: ahead || 0, behind: behind || 0 };
+		const parts = output.split ('\t').map (Number);
+		const behind = parts[0] || 0;
+		const ahead = parts[1] || 0;
+		return { ahead, behind };
 	}
 
 	async getRemoteAheadBehind (): Promise<{
@@ -113,14 +122,19 @@ export class GitUtils {
 		{ hash: string; author: string; message: string; date: string }[]
 	> {
 		const output = await this.run (
-			`git log ${branch} -${count} --format="%H|%an|%s|%ar"`
+			`git log ${sanitizeRef (branch)} -${Math.max (1, Math.min (count, 100))} --format="%H|%an|%s|%ar"`
 		);
 		return output
 			.split ('\n')
 			.filter ((l) => l.length > 0)
 			.map ((line) => {
-				const [hash, author, message, date] = line.split ('|');
-				return { hash, author, message, date };
+				const parts = line.split ('|');
+				return {
+					hash: parts[0] || '',
+					author: parts[1] || '',
+					message: parts[2] || '',
+					date: parts[3] || '',
+				};
 			});
 	}
 
@@ -140,14 +154,14 @@ export class GitUtils {
 
 	async isBranchMerged (branch: string, into: string): Promise<boolean> {
 		const output = await this.run (
-			`git branch --merged ${into} --format="%(refname:short)"`
+			`git branch --merged ${sanitizeRef (into)} --format="%(refname:short)"`
 		);
 		return output.split ('\n').includes (branch);
 	}
 
 	async getLastCommitDate (branch: string): Promise<string> {
 		return this.run (
-			`git log ${branch} -1 --format="%ar"`
+			`git log ${sanitizeRef (branch)} -1 --format="%ar"`
 		);
 	}
 

@@ -66,6 +66,7 @@ export async function activate (context: vscode.ExtensionContext) {
 		['jungleKit.nextTagGlobal', () => tagSystem.navigateTag ('next', true)],
 		['jungleKit.prevTagGlobal', () => tagSystem.navigateTag ('prev', true)],
 		['jungleKit.configureShortcuts', () => tagSystem.configureShortcuts ()],
+		['jungleKit.checkReviews', () => tagSystem.checkReviews ()],
 		['jungleKit.clearFileTags', (item: any) => {
 			const match = item?.contextValue?.match (/tagFile-(.+)/);
 			if (match) { tagSystem.clearFileAnnotations (match[1]); }

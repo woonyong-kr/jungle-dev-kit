@@ -169,5 +169,3 @@ export class ConfigManager {
 		}
 	}
 }
-
-

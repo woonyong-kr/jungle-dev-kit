@@ -10,6 +10,15 @@ import { TagSystem } from './tagSystem';
 
 const execAsync = promisify (exec);
 
+function escapeHtml (str: string): string {
+	return str
+		.replace (/&/g, '&amp;')
+		.replace (/</g, '&lt;')
+		.replace (/>/g, '&gt;')
+		.replace (/"/g, '&quot;')
+		.replace (/'/g, '&#039;');
+}
+
 /**
  * PR Panel
  * WebView-based PR creation panel.
@@ -43,13 +52,20 @@ export class PRPanel {
 
 		// Gather data
 		const currentBranch = await this.git.getCurrentBranch ();
-		const diff = await this.git.getStagedDiff () || await this.git.getDiffAgainst ('dev');
-		const changedFiles = await this.git.getChangedFiles ('dev');
+		const allBranches = await this.git.getLocalBranches ();
+		// 현재 브랜치를 제외한 모든 로컬 브랜치를 PR 대상으로 사용
+		const baseBranches = allBranches.filter ((b) => b !== currentBranch);
+		const defaultBase = this.guessDefaultBase (baseBranches);
+
+		const diff = await this.git.getStagedDiff () || await this.git.getDiffAgainst (defaultBase);
+		const changedFiles = await this.git.getChangedFiles (defaultBase);
 		const commits = await this.git.getRecentCommits (currentBranch, 10);
 		const reviewTags = this.tagSystem.getReviewTags ();
 
 		panel.webview.html = this.getWebviewContent (
 			currentBranch,
+			baseBranches,
+			defaultBase,
 			changedFiles,
 			commits,
 			reviewTags
@@ -64,18 +80,52 @@ export class PRPanel {
 			case 'createPR':
 				await this.handleCreatePR (panel, message.data);
 				break;
+			case 'changeBase': {
+				// base 브랜치가 바뀌면 diff와 파일 목록을 다시 계산
+				const newBase = message.base as string;
+				const newDiff = await this.git.getStagedDiff () || await this.git.getDiffAgainst (newBase);
+				const newChangedFiles = await this.git.getChangedFiles (newBase);
+				panel.webview.postMessage ({
+					command: 'updateFiles',
+					files: newChangedFiles,
+				});
+				// 내부 diff도 갱신 (AI 생성 시 사용)
+				this._currentDiff = newDiff;
+				this._currentChangedFiles = newChangedFiles;
+				break;
+			}
 			}
 		});
+
+		// 내부 상태로 현재 diff/files 보관 (base 변경 시 갱신)
+		this._currentDiff = diff;
+		this._currentChangedFiles = changedFiles;
+	}
+
+	private _currentDiff: string = '';
+	private _currentChangedFiles: Array<{ path: string; additions: number; deletions: number }> = [];
+
+	/** 공통 base 브랜치 후보를 우선순위에 따라 추정 */
+	private guessDefaultBase (branches: string[]): string {
+		if (branches.length === 0) { return 'main'; }
+		const preferred = ['dev', 'develop', 'main', 'master'];
+		for (const name of preferred) {
+			if (branches.includes (name)) { return name; }
+		}
+		return branches[0];
 	}
 
 	private async handleAIGenerate (
 		panel: vscode.WebviewPanel,
-		diff: string,
+		_diff: string,
 		branch: string,
-		changedFiles: Array<{ path: string; additions: number; deletions: number }>,
+		_changedFiles: Array<{ path: string; additions: number; deletions: number }>,
 		commits: Array<{ hash: string; message: string; author: string }>,
 		reviewTags: Array<{ file: string; line: number; content: string }>
 	): Promise<void> {
+		// base 변경 시 갱신된 값 사용
+		const diff = this._currentDiff || _diff;
+		const changedFiles = this._currentChangedFiles.length > 0 ? this._currentChangedFiles : _changedFiles;
 		const apiKey = await this.apiKeys.getKey ();
 		if (!apiKey) {
 			panel.webview.postMessage ({ command: 'error', text: 'API 키를 먼저 등록하세요.' });
@@ -126,7 +176,7 @@ ${commitsSummary}
 ${reviewSummary}
 
 === Diff ===
-${diff.substring (0, 6000)}`,
+${(diff || '').substring (0, 6000)}`,
 					},
 				],
 			});
@@ -173,7 +223,8 @@ ${diff.substring (0, 6000)}`,
 		// Push current branch first
 		try {
 			const branch = await this.git.getCurrentBranch ();
-			await execAsync (`git push -u origin ${branch}`, { cwd: root });
+			const safeBranch = branch.replace (/[^a-zA-Z0-9_\-\/.]/g, '');
+			await execAsync (`git push -u origin ${safeBranch}`, { cwd: root });
 		} catch {
 			// May already be pushed
 		}
@@ -223,21 +274,14 @@ ${diff.substring (0, 6000)}`,
 
 	private getWebviewContent (
 		branch: string,
+		baseBranches: string[],
+		defaultBase: string,
 		changedFiles: Array<{ path: string; additions: number; deletions: number }>,
 		commits: Array<{ hash: string; message: string; author: string; date: string }>,
 		reviewTags: Array<{ file: string; line: number; content: string }>
 	): string {
-		const fileRows = changedFiles
-			.map ((f) => `<tr><td>${f.path}</td><td>+${f.additions}</td><td>-${f.deletions}</td></tr>`)
-			.join ('');
-
-		const commitList = commits
-			.map ((c) => `<li><code>${c.hash.substring (0, 7)}</code> ${c.message} (${c.author})</li>`)
-			.join ('');
-
-		const reviewList = reviewTags
-			.map ((t) => `<li>${t.file}:${t.line + 1} -- ${t.content}</li>`)
-			.join ('');
+		const totalAdditions = changedFiles.reduce ((sum, f) => sum + f.additions, 0);
+		const totalDeletions = changedFiles.reduce ((sum, f) => sum + f.deletions, 0);
 
 		return `<!DOCTYPE html>
 <html>
@@ -254,306 +298,489 @@ ${diff.substring (0, 6000)}`,
 		line-height: 1.5;
 	}
 
-	/* Top bar */
-	.topbar {
-		display: flex; align-items: center; justify-content: space-between;
-		padding: 12px 20px;
+	/* ── Header ── */
+	.header {
+		padding: 20px 24px 16px;
 		background: var(--vscode-sideBar-background);
 		border-bottom: 1px solid var(--vscode-panel-border);
 	}
-	.topbar-left { display: flex; align-items: center; gap: 10px; }
-	.topbar h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.3px; }
-	.topbar .icon { font-size: 16px; opacity: 0.7; }
+	.header-top {
+		display: flex; align-items: center; justify-content: space-between;
+		margin-bottom: 14px;
+	}
+	.header-title {
+		display: flex; align-items: center; gap: 10px;
+	}
+	.header-title h1 {
+		font-size: 15px; font-weight: 700; letter-spacing: -0.2px;
+	}
+	.header-title .icon {
+		width: 28px; height: 28px; border-radius: 6px;
+		background: var(--vscode-button-background);
+		color: var(--vscode-button-foreground);
+		display: flex; align-items: center; justify-content: center;
+		font-size: 14px; font-weight: 700;
+	}
 	.branch-flow {
-		display: flex; align-items: center; gap: 6px;
-		font-size: 12px; color: var(--vscode-descriptionForeground);
+		display: flex; align-items: center; gap: 8px;
+		padding: 8px 12px;
+		background: var(--vscode-editor-background);
+		border: 1px solid var(--vscode-panel-border);
+		border-radius: 6px;
 	}
 	.branch-tag {
-		font-size: 11px; padding: 2px 8px;
+		font-size: 11px; padding: 3px 10px;
 		background: var(--vscode-badge-background);
 		color: var(--vscode-badge-foreground);
-		border-radius: 3px; font-family: var(--vscode-editor-font-family, monospace);
+		border-radius: 4px;
+		font-family: var(--vscode-editor-font-family, monospace);
+		font-weight: 500;
 	}
-	.branch-arrow { color: var(--vscode-descriptionForeground); font-size: 14px; }
+	.branch-arrow {
+		color: var(--vscode-descriptionForeground);
+		font-size: 13px; opacity: 0.6;
+	}
+	.base-select {
+		width: auto !important; padding: 3px 8px !important;
+		font-size: 11px !important; border-radius: 4px !important;
+		font-family: var(--vscode-editor-font-family, monospace) !important;
+		font-weight: 500 !important;
+	}
+	.diff-summary {
+		display: flex; gap: 12px; font-size: 11px;
+		color: var(--vscode-descriptionForeground);
+		margin-left: auto; padding-left: 16px;
+	}
+	.diff-summary .add { color: #4EC9B0; font-weight: 600; }
+	.diff-summary .del { color: #F14C4C; font-weight: 600; }
+	.diff-summary .files { opacity: 0.8; }
 
-	/* Content */
-	.content { padding: 16px 20px; }
+	/* ── Main Content ── */
+	.content { padding: 20px 24px; }
 
-	/* Form */
-	.form-group { margin-bottom: 14px; }
+	/* ── Form ── */
+	.form-group { margin-bottom: 18px; }
 	.form-label {
-		display: block; font-size: 11px; font-weight: 600;
+		display: flex; align-items: center; gap: 6px;
+		font-size: 11px; font-weight: 600;
 		color: var(--vscode-descriptionForeground);
 		text-transform: uppercase; letter-spacing: 0.8px;
-		margin-bottom: 5px;
+		margin-bottom: 6px;
 	}
-	.form-row { display: flex; gap: 8px; align-items: stretch; }
+	.form-label .required {
+		color: var(--vscode-errorForeground, #F44336);
+		font-size: 10px;
+	}
 
 	input, textarea, select {
-		width: 100%; padding: 7px 10px;
+		width: 100%; padding: 8px 12px;
 		font-family: var(--vscode-font-family);
 		font-size: var(--vscode-font-size, 13px);
 		background: var(--vscode-input-background);
 		color: var(--vscode-input-foreground);
-		border: 1px solid var(--vscode-input-border);
-		border-radius: 4px; outline: none;
-		transition: border-color 0.15s;
+		border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+		border-radius: 6px; outline: none;
+		transition: border-color 0.15s, box-shadow 0.15s;
 	}
 	input:focus, textarea:focus, select:focus {
 		border-color: var(--vscode-focusBorder);
+		box-shadow: 0 0 0 1px var(--vscode-focusBorder);
 	}
 	textarea {
-		min-height: 200px; resize: vertical;
+		min-height: 220px; resize: vertical;
 		font-family: var(--vscode-editor-font-family, monospace);
 		font-size: 12px; line-height: 1.7;
 	}
 	input:disabled { opacity: 0.5; cursor: not-allowed; }
 
-	/* Buttons */
+	/* ── Title Row with AI Button ── */
+	.title-row {
+		display: flex; gap: 8px; align-items: stretch;
+	}
+	.title-row input { flex: 1; }
+
+	/* ── Buttons ── */
 	.btn {
-		display: inline-flex; align-items: center; justify-content: center;
-		padding: 7px 16px; font-size: 12px; font-weight: 600;
-		border: none; border-radius: 4px; cursor: pointer;
+		display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+		padding: 8px 16px; font-size: 12px; font-weight: 600;
+		border: none; border-radius: 6px; cursor: pointer;
 		white-space: nowrap; transition: all 0.15s;
-		letter-spacing: 0.3px;
+		letter-spacing: 0.2px;
 	}
-	.btn:hover { filter: brightness(1.1); }
-	.btn:active { transform: scale(0.98); }
-	.btn-primary {
-		background: var(--vscode-button-background);
-		color: var(--vscode-button-foreground);
-	}
-	.btn-secondary {
-		background: var(--vscode-button-secondaryBackground);
-		color: var(--vscode-button-secondaryForeground);
-	}
+	.btn:hover { filter: brightness(1.12); }
+	.btn:active { transform: scale(0.97); }
+
 	.btn-ai {
-		background: var(--vscode-button-secondaryBackground);
-		color: var(--vscode-button-secondaryForeground);
-		border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
-		font-size: 11px; padding: 6px 12px;
+		background: linear-gradient(135deg,
+			var(--vscode-button-background),
+			color-mix(in srgb, var(--vscode-button-background) 70%, #a855f7)
+		);
+		color: var(--vscode-button-foreground);
+		padding: 8px 18px; font-size: 12px;
+		box-shadow: 0 1px 4px rgba(0,0,0,0.15);
 	}
 	.btn-ai:hover {
-		background: var(--vscode-button-secondaryHoverBackground);
+		box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+		filter: brightness(1.08);
+	}
+	.btn-ai .spark { font-size: 13px; }
+
+	.btn-create {
+		background: var(--vscode-button-background);
+		color: var(--vscode-button-foreground);
+		padding: 10px 28px; font-size: 13px; font-weight: 700;
+		border-radius: 6px;
+		box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+	}
+	.btn-create:hover {
+		box-shadow: 0 2px 6px rgba(0,0,0,0.2);
 	}
 
-	/* Collapsible sections */
+	/* ── Loading ── */
+	.loading {
+		display: none; align-items: center; gap: 8px;
+		margin-top: 8px; padding: 8px 12px;
+		background: var(--vscode-sideBar-background);
+		border-radius: 6px;
+		font-size: 11px; color: var(--vscode-descriptionForeground);
+	}
+	.loading.active { display: inline-flex; }
+	.spinner {
+		width: 14px; height: 14px;
+		border: 2px solid var(--vscode-descriptionForeground);
+		border-top-color: var(--vscode-button-background);
+		border-radius: 50%;
+		animation: spin 0.8s linear infinite;
+	}
+	@keyframes spin { to { transform: rotate(360deg); } }
+
+	/* ── Collapsible Sections ── */
+	.panels { margin-top: 4px; }
 	.section {
 		border: 1px solid var(--vscode-panel-border);
-		border-radius: 4px; margin-bottom: 10px;
+		border-radius: 6px; margin-bottom: 8px;
 		overflow: hidden;
 	}
 	.section-header {
 		display: flex; align-items: center; gap: 8px;
-		padding: 7px 12px; cursor: pointer;
+		padding: 9px 14px; cursor: pointer;
 		background: var(--vscode-sideBar-background);
 		font-size: 11px; font-weight: 600;
 		color: var(--vscode-descriptionForeground);
 		text-transform: uppercase; letter-spacing: 0.5px;
 		user-select: none;
+		transition: background 0.1s;
 	}
 	.section-header:hover { background: var(--vscode-list-hoverBackground); }
-	.section-header .count {
-		font-size: 10px; padding: 1px 6px; margin-left: auto;
+	.section-header .badge {
+		font-size: 10px; padding: 1px 7px; margin-left: auto;
 		background: var(--vscode-badge-background);
 		color: var(--vscode-badge-foreground);
-		border-radius: 8px; font-weight: normal;
+		border-radius: 10px; font-weight: 500;
 	}
-	.section-body { padding: 0; max-height: 200px; overflow-y: auto; }
+	.section-body { padding: 0; max-height: 220px; overflow-y: auto; }
 	.section.collapsed .section-body { display: none; }
-	.section-header .chevron { transition: transform 0.15s; font-size: 9px; }
+	.section-header .chevron {
+		transition: transform 0.2s ease; font-size: 10px;
+		opacity: 0.6;
+	}
 	.section.collapsed .chevron { transform: rotate(-90deg); }
 
-	/* File table */
-	.file-table { width: 100%; border-collapse: collapse; }
-	.file-table tr:hover { background: var(--vscode-list-hoverBackground); }
-	.file-table td {
-		padding: 5px 12px; font-size: 12px;
+	/* ── File List ── */
+	.file-item {
+		display: flex; align-items: center;
+		padding: 6px 14px; font-size: 12px;
 		border-top: 1px solid var(--vscode-panel-border);
 		font-family: var(--vscode-editor-font-family, monospace);
+		gap: 8px;
+		transition: background 0.1s;
 	}
-	.file-table td:nth-child(2), .file-table td:nth-child(3) {
-		width: 60px; text-align: right;
+	.file-item:first-child { border-top: none; }
+	.file-item:hover { background: var(--vscode-list-hoverBackground); }
+	.file-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.file-path .dir { opacity: 0.5; }
+	.file-stats {
+		display: flex; gap: 4px; flex-shrink: 0; font-size: 11px; font-weight: 500;
 	}
-	.file-table .add { color: #4EC9B0; }
-	.file-table .del { color: #F14C4C; }
+	.file-stats .add { color: #4EC9B0; }
+	.file-stats .del { color: #F14C4C; }
+	.stat-bar {
+		display: flex; gap: 1px; align-items: center;
+		margin-left: 6px; flex-shrink: 0;
+	}
+	.stat-bar span {
+		width: 4px; height: 10px; border-radius: 1px;
+		background: var(--vscode-panel-border);
+	}
+	.stat-bar .bar-add { background: #4EC9B0; }
+	.stat-bar .bar-del { background: #F14C4C; }
 
-	/* Commit list */
-	.commit-list { list-style: none; }
-	.commit-list li {
-		padding: 5px 12px; font-size: 12px;
+	/* ── Commit List ── */
+	.commit-item {
+		display: flex; align-items: baseline; gap: 10px;
+		padding: 7px 14px; font-size: 12px;
 		border-top: 1px solid var(--vscode-panel-border);
-		display: flex; align-items: baseline; gap: 8px;
+		transition: background 0.1s;
 	}
-	.commit-list li:hover { background: var(--vscode-list-hoverBackground); }
-	.commit-list code {
+	.commit-item:first-child { border-top: none; }
+	.commit-item:hover { background: var(--vscode-list-hoverBackground); }
+	.commit-hash {
 		font-family: var(--vscode-editor-font-family, monospace);
 		color: var(--vscode-textLink-foreground);
 		font-size: 11px; flex-shrink: 0;
+		font-weight: 500;
 	}
-	.commit-list .msg { flex: 1; }
-	.commit-list .author {
+	.commit-msg { flex: 1; }
+	.commit-author {
 		color: var(--vscode-descriptionForeground);
-		font-size: 10px; flex-shrink: 0;
+		font-size: 10px; flex-shrink: 0; font-style: italic;
 	}
 
-	/* Review list */
-	.review-list { list-style: none; }
-	.review-list li {
-		padding: 5px 12px; font-size: 12px;
+	/* ── Review Tags ── */
+	.review-item {
+		display: flex; align-items: baseline; gap: 10px;
+		padding: 7px 14px; font-size: 12px;
 		border-top: 1px solid var(--vscode-panel-border);
-		display: flex; gap: 8px;
+		transition: background 0.1s;
 	}
-	.review-list li:hover { background: var(--vscode-list-hoverBackground); }
-	.review-list .loc {
+	.review-item:first-child { border-top: none; }
+	.review-item:hover { background: var(--vscode-list-hoverBackground); }
+	.review-marker {
+		flex-shrink: 0; font-size: 11px;
+	}
+	.review-loc {
 		color: var(--vscode-textLink-foreground);
 		font-family: var(--vscode-editor-font-family, monospace);
-		font-size: 11px; flex-shrink: 0;
+		font-size: 11px; flex-shrink: 0; font-weight: 500;
+	}
+	.review-content { flex: 1; opacity: 0.9; }
+
+	/* ── Divider ── */
+	.divider {
+		height: 1px;
+		background: var(--vscode-panel-border);
+		margin: 8px 0 18px;
 	}
 
-	/* Footer */
+	/* ── Footer ── */
 	.footer {
-		padding: 14px 20px;
+		padding: 16px 24px;
 		border-top: 1px solid var(--vscode-panel-border);
-		display: flex; align-items: center; gap: 10px;
+		background: var(--vscode-sideBar-background);
+		display: flex; align-items: center; justify-content: flex-end; gap: 12px;
 	}
 
-	/* Messages */
+	/* ── Messages ── */
+	#messageArea { padding: 0 24px; }
 	.message {
-		margin: 10px 20px; padding: 10px 14px;
-		border-radius: 4px; font-size: 12px;
+		margin: 12px 0; padding: 10px 14px;
+		border-radius: 6px; font-size: 12px;
+		display: flex; align-items: center; gap: 8px;
+		animation: slideIn 0.2s ease;
 	}
+	@keyframes slideIn {
+		from { opacity: 0; transform: translateY(-4px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+	.msg-icon { font-size: 14px; flex-shrink: 0; }
 	.error {
 		background: var(--vscode-inputValidation-errorBackground, rgba(244,67,54,0.08));
-		border: 1px solid var(--vscode-inputValidation-errorBorder, #F44336);
+		border: 1px solid var(--vscode-inputValidation-errorBorder, rgba(244,67,54,0.3));
 		color: var(--vscode-errorForeground, #F44336);
 	}
 	.success {
 		background: rgba(76,175,80,0.08);
-		border: 1px solid rgba(76,175,80,0.25);
+		border: 1px solid rgba(76,175,80,0.2);
 		color: #4CAF50;
 	}
-
-	/* Loading */
-	.loading { display: none; align-items: center; gap: 8px; font-size: 11px; color: var(--vscode-descriptionForeground); }
-	.loading.active { display: inline-flex; }
-	.spinner {
-		width: 12px; height: 12px;
-		border: 2px solid var(--vscode-descriptionForeground);
-		border-top-color: transparent;
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
+	.success a {
+		color: var(--vscode-textLink-foreground);
+		text-decoration: underline;
 	}
-	@keyframes spin { to { transform: rotate(360deg); } }
-
-	/* Divider */
-	.divider { height: 1px; background: var(--vscode-panel-border); margin: 6px 0 14px; }
 </style>
 </head>
 <body>
-	<div class="topbar">
-		<div class="topbar-left">
-			<span class="icon">⎇</span>
-			<h1>Pull Request</h1>
+	<!-- Header -->
+	<div class="header">
+		<div class="header-top">
+			<div class="header-title">
+				<div class="icon">PR</div>
+				<h1>Pull Request</h1>
+			</div>
 		</div>
 		<div class="branch-flow">
-			<span class="branch-tag">${branch}</span>
-			<span class="branch-arrow">→</span>
-			<select id="base" style="width:auto;padding:2px 6px;font-size:11px;border-radius:3px;">
-				<option value="dev" selected>dev</option>
-				<option value="main">main</option>
-				<option value="master">master</option>
+			<span class="branch-tag">${escapeHtml (branch)}</span>
+			<span class="branch-arrow">&rarr;</span>
+			<select id="base" class="base-select" onchange="onBaseChange()">
+				${baseBranches.map ((b) =>
+					`<option value="${escapeHtml (b)}"${b === defaultBase ? ' selected' : ''}>${escapeHtml (b)}</option>`
+				).join ('')}
 			</select>
-		</div>
-	</div>
-
-	<div class="content">
-		<div class="form-group">
-			<label class="form-label">Title</label>
-			<div class="form-row">
-				<input type="text" id="title" placeholder="feat: 변경 내용을 한국어로 작성" style="flex:1;" />
-				<button class="btn btn-ai" onclick="generateAI()">✦ AI 생성</button>
-			</div>
-			<div class="loading" id="loading" style="margin-top:6px;">
-				<div class="spinner"></div>
-				<span>AI가 diff를 분석하고 있습니다...</span>
+			<div class="diff-summary">
+				<span class="files">${changedFiles.length} files</span>
+				<span class="add">+${totalAdditions}</span>
+				<span class="del">&minus;${totalDeletions}</span>
 			</div>
 		</div>
-
-		<div class="form-group">
-			<label class="form-label">Description</label>
-			<textarea id="body" placeholder="## 변경 내용&#10;&#10;## 변경 이유&#10;&#10;## 구현 방법&#10;&#10;## 주의사항"></textarea>
-		</div>
-
-		<div class="divider"></div>
-
-		<div class="section" id="filesSection">
-			<div class="section-header" onclick="toggleSection('filesSection')">
-				<span class="chevron">▼</span>
-				<span>Files Changed</span>
-				<span class="count">${changedFiles.length}</span>
-			</div>
-			<div class="section-body">
-				<table class="file-table">
-					${changedFiles.map ((f) =>
-						'<tr><td>' + f.path + '</td><td class="add">+' + f.additions + '</td><td class="del">-' + f.deletions + '</td></tr>'
-					).join ('')}
-				</table>
-			</div>
-		</div>
-
-		<div class="section" id="commitsSection">
-			<div class="section-header" onclick="toggleSection('commitsSection')">
-				<span class="chevron">▼</span>
-				<span>Commits</span>
-				<span class="count">${commits.length}</span>
-			</div>
-			<div class="section-body">
-				<ul class="commit-list">
-					${commits.length > 0
-						? commits.map ((c) =>
-							'<li><code>' + c.hash.substring (0, 7) + '</code><span class="msg">' + c.message + '</span><span class="author">' + c.author + '</span></li>'
-						).join ('')
-						: '<li style="color:var(--vscode-descriptionForeground);justify-content:center;">커밋 없음</li>'}
-				</ul>
-			</div>
-		</div>
-
-		${reviewTags.length > 0 ? `
-		<div class="section" id="reviewSection">
-			<div class="section-header" onclick="toggleSection('reviewSection')">
-				<span class="chevron">▼</span>
-				<span>Review Points</span>
-				<span class="count">${reviewTags.length}</span>
-			</div>
-			<div class="section-body">
-				<ul class="review-list">
-					${reviewTags.map ((t) =>
-						'<li><span class="loc">' + t.file + ':' + (t.line + 1) + '</span><span>' + t.content + '</span></li>'
-					).join ('')}
-				</ul>
-			</div>
-		</div>` : ''}
-
-		<div class="divider"></div>
-
-		<div class="form-group">
-			<label class="form-label">Reviewers</label>
-			<input type="text" id="reviewers" placeholder="GitHub ID (쉼표로 구분)" />
-		</div>
-	</div>
-
-	<div class="footer">
-		<button class="btn btn-primary" onclick="createPR()">PR 생성</button>
 	</div>
 
 	<div id="messageArea"></div>
 
+	<div class="content">
+		<!-- Title -->
+		<div class="form-group">
+			<label class="form-label">Title <span class="required">*</span></label>
+			<div class="title-row">
+				<input type="text" id="title" placeholder="feat: 변경 내용을 간결하게 작성" />
+				<button class="btn btn-ai" onclick="generateAI()">
+					<span class="spark">&#10023;</span> AI 생성
+				</button>
+			</div>
+			<div class="loading" id="loading">
+				<div class="spinner"></div>
+				<span>diff 분석 중...</span>
+			</div>
+		</div>
+
+		<!-- Body -->
+		<div class="form-group">
+			<label class="form-label">Description</label>
+			<textarea id="body" placeholder="## 변경 개요&#10;&#10;## 주요 변경&#10;- [파일] 함수 — 변경 내용&#10;&#10;## 배경&#10;&#10;## 리뷰 포인트&#10;- ⚠️ 파일:라인 — 이슈&#10;&#10;## 검증"></textarea>
+		</div>
+
+		<div class="divider"></div>
+
+		<!-- Panels: Files / Commits / Reviews -->
+		<div class="panels">
+			<div class="section" id="filesSection">
+				<div class="section-header" onclick="toggleSection('filesSection')">
+					<span class="chevron">&#9660;</span>
+					<span>Changed Files</span>
+					<span class="badge">${changedFiles.length}</span>
+				</div>
+				<div class="section-body">
+					${changedFiles.map ((f) => {
+						const parts = f.path.split ('/');
+						const fileName = parts.pop ();
+						const dir = parts.length > 0 ? parts.join ('/') + '/' : '';
+						const total = f.additions + f.deletions;
+						const maxBars = 5;
+						const addBars = total > 0 ? Math.round ((f.additions / total) * maxBars) : 0;
+						const delBars = total > 0 ? maxBars - addBars : 0;
+						const bars = '<span class="bar-add"></span>'.repeat (addBars) + '<span class="bar-del"></span>'.repeat (delBars);
+						return '<div class="file-item">'
+							+ '<span class="file-path"><span class="dir">' + escapeHtml (dir) + '</span>' + escapeHtml (fileName || '') + '</span>'
+							+ '<span class="file-stats"><span class="add">+' + f.additions + '</span><span class="del">-' + f.deletions + '</span></span>'
+							+ '<span class="stat-bar">' + bars + '</span>'
+							+ '</div>';
+					}).join ('')}
+				</div>
+			</div>
+
+			<div class="section" id="commitsSection">
+				<div class="section-header" onclick="toggleSection('commitsSection')">
+					<span class="chevron">&#9660;</span>
+					<span>Commits</span>
+					<span class="badge">${commits.length}</span>
+				</div>
+				<div class="section-body">
+					${commits.length > 0
+						? commits.map ((c) =>
+							'<div class="commit-item">'
+							+ '<span class="commit-hash">' + escapeHtml (c.hash.substring (0, 7)) + '</span>'
+							+ '<span class="commit-msg">' + escapeHtml (c.message) + '</span>'
+							+ '<span class="commit-author">' + escapeHtml (c.author) + '</span>'
+							+ '</div>'
+						).join ('')
+						: '<div class="commit-item" style="color:var(--vscode-descriptionForeground);justify-content:center;">No commits</div>'}
+				</div>
+			</div>
+
+			${reviewTags.length > 0 ? `
+			<div class="section" id="reviewSection">
+				<div class="section-header" onclick="toggleSection('reviewSection')">
+					<span class="chevron">&#9660;</span>
+					<span>Review Points</span>
+					<span class="badge">${reviewTags.length}</span>
+				</div>
+				<div class="section-body">
+					${reviewTags.map ((t) =>
+						'<div class="review-item">'
+						+ '<span class="review-marker">&#9888;&#65039;</span>'
+						+ '<span class="review-loc">' + escapeHtml (t.file) + ':' + (t.line + 1) + '</span>'
+						+ '<span class="review-content">' + escapeHtml (t.content) + '</span>'
+						+ '</div>'
+					).join ('')}
+				</div>
+			</div>` : ''}
+		</div>
+
+		<div class="divider"></div>
+
+		<!-- Reviewers -->
+		<div class="form-group">
+			<label class="form-label">Reviewers</label>
+			<input type="text" id="reviewers" placeholder="GitHub username (comma separated)" />
+		</div>
+	</div>
+
+	<!-- Footer -->
+	<div class="footer">
+		<button class="btn btn-create" onclick="createPR()">PR 만들기</button>
+	</div>
+
 	<script>
 		const vscode = acquireVsCodeApi();
 
+		function esc(s) {
+			const d = document.createElement('div');
+			d.textContent = s;
+			return d.innerHTML;
+		}
+
 		function toggleSection(id) {
 			document.getElementById(id).classList.toggle('collapsed');
+		}
+
+		function updateFileList(files) {
+			const section = document.getElementById('filesSection');
+			if (!section) return;
+			const badge = section.querySelector('.badge');
+			if (badge) badge.textContent = files.length;
+			const body = section.querySelector('.section-body');
+			if (!body) return;
+			let totalAdd = 0, totalDel = 0;
+			body.innerHTML = files.map(function(f) {
+				totalAdd += f.additions;
+				totalDel += f.deletions;
+				const parts = f.path.split('/');
+				const fileName = parts.pop() || '';
+				const dir = parts.length > 0 ? parts.join('/') + '/' : '';
+				const total = f.additions + f.deletions;
+				const maxBars = 5;
+				const addBars = total > 0 ? Math.round((f.additions / total) * maxBars) : 0;
+				const delBars = total > 0 ? maxBars - addBars : 0;
+				let bars = '';
+				for (let i = 0; i < addBars; i++) bars += '<span class="bar-add"></span>';
+				for (let i = 0; i < delBars; i++) bars += '<span class="bar-del"></span>';
+				return '<div class="file-item">'
+					+ '<span class="file-path"><span class="dir">' + esc(dir) + '</span>' + esc(fileName) + '</span>'
+					+ '<span class="file-stats"><span class="add">+' + f.additions + '</span><span class="del">-' + f.deletions + '</span></span>'
+					+ '<span class="stat-bar">' + bars + '</span>'
+					+ '</div>';
+			}).join('');
+			// diff summary 갱신
+			const summary = document.querySelector('.diff-summary');
+			if (summary) {
+				summary.innerHTML = '<span class="files">' + files.length + ' files</span>'
+					+ '<span class="add">+' + totalAdd + '</span>'
+					+ '<span class="del">&minus;' + totalDel + '</span>';
+			}
+		}
+
+		function onBaseChange() {
+			const base = document.getElementById('base').value;
+			vscode.postMessage({ command: 'changeBase', base: base });
 		}
 
 		function generateAI() {
@@ -566,7 +793,7 @@ ${diff.substring (0, 6000)}`,
 			const title = document.getElementById('title').value;
 			if (!title.trim()) {
 				document.getElementById('messageArea').innerHTML =
-					'<div class="message error">제목을 입력하세요.</div>';
+					'<div class="message error"><span class="msg-icon">&#10060;</span> 제목을 입력하세요.</div>';
 				return;
 			}
 			vscode.postMessage({
@@ -590,14 +817,18 @@ ${diff.substring (0, 6000)}`,
 				case 'aiResult':
 					document.getElementById('title').value = msg.title;
 					document.getElementById('body').value = msg.body;
-					area.innerHTML = '<div class="message success">AI 생성 완료</div>';
+					area.innerHTML = '<div class="message success"><span class="msg-icon">&#10003;</span> AI 생성 완료</div>';
 					setTimeout(() => { area.innerHTML = ''; }, 3000);
 					break;
 				case 'error':
-					area.innerHTML = '<div class="message error">' + msg.text + '</div>';
+					area.innerHTML = '<div class="message error"><span class="msg-icon">&#10060;</span> ' + esc(msg.text) + '</div>';
 					break;
 				case 'success':
-					area.innerHTML = '<div class="message success">' + msg.text + '</div>';
+					area.innerHTML = '<div class="message success"><span class="msg-icon">&#10003;</span> ' + esc(msg.text) + '</div>';
+					break;
+				case 'updateFiles':
+					// base 브랜치 변경 시 파일 목록과 통계를 갱신
+					updateFileList(msg.files);
 					break;
 			}
 		});

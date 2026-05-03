@@ -6,6 +6,8 @@ import { ConfigManager } from '../utils/configManager';
 
 const execAsync = promisify (exec);
 
+const MAX_BUFFER = 5 * 1024 * 1024; // 5 MB
+
 /**
  * Shadow Diff
  * Shows other team members' changes as visual overlays in the editor.
@@ -153,7 +155,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 				// Get diff between current branch and remote branch (only C/H files)
 				const { stdout: diffOutput } = await execAsync (
 					`git diff ${currentBranch}...${remoteBranch} -- '*.c' '*.h' 2>/dev/null`,
-					{ cwd: root, maxBuffer: 1024 * 1024 * 5 }
+					{ cwd: root, maxBuffer: MAX_BUFFER }
 				);
 
 				if (!diffOutput.trim ()) {continue;}

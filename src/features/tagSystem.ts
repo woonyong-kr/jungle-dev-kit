@@ -8,6 +8,18 @@ import { APIKeyManager } from '../utils/apiKeyManager';
 
 const execAsync = promisify (execCb);
 
+// ── 설정 상수 ──
+const MAX_BUFFER = 10 * 1024 * 1024;        // git diff 등 최대 버퍼 (10 MB)
+const SCAN_DEBOUNCE_MS = 300;                // 문서 변경 후 스캔 대기 시간
+const WARN_DEBOUNCE_MS = 2000;               // 진단 변경 후 가상 warn 동기화 대기
+const MAX_VIRTUAL_WARNS_PER_FILE = 20;       // 파일당 최대 가상 @warn 수
+const MAX_WORKSPACE_SCAN_FILES = 500;        // 워크스페이스 스캔 최대 파일 수
+const MAX_BLOCK_COMMENT_LINES = 30;          // 블록 주석 최대 스캔 줄 수
+const WORKSPACE_SCAN_GLOB = '**/*.{c,h}';    // 스캔 대상 파일 패턴
+const WORKSPACE_SCAN_EXCLUDE = '**/build/**'; // 스캔 제외 패턴
+const DIFF_FILE_EXTENSIONS = "'*.c' '*.h'";  // git diff 대상 확장자
+const AI_MAX_CONTEXT_LINES = 10;             // AI 설명 생성 시 전후 컨텍스트 줄 수
+
 /**
  * Annotation System (Phase 1 + Phase 2)
  *
@@ -54,6 +66,7 @@ interface AnnotationsData {
 interface ShortcutEntry {
 	id: string;
 	label: string;
+	description?: string;
 	command: string;
 	key: string;
 	mac?: string;
@@ -254,7 +267,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 						)
 					);
 					this._onDidChangeTreeData.fire ();
-				}, 300);
+				}, SCAN_DEBOUNCE_MS);
 			}),
 			// 에디터 전환 시 데코레이션 적용
 			vscode.window.onDidChangeActiveTextEditor ((editor) => {
@@ -372,7 +385,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 						contentLines.push (firstLineContent.replace (/,\s*$/, ','));
 					}
 					// 다음 줄들에서 내용 수집 (* 으로 시작하는 줄, 최대 30줄)
-					const maxBlockEnd = Math.min (i + 30, doc.lineCount);
+					const maxBlockEnd = Math.min (i + MAX_BLOCK_COMMENT_LINES, doc.lineCount);
 					for (let j = i + 1; j < maxBlockEnd; j++) {
 						const nextLine = doc.lineAt (j).text.trim ();
 						if (nextLine.endsWith ('*/')) {
@@ -424,7 +437,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	 * 에디터에 열려있지 않은 파일도 포함하여 사이드바에 누락 없이 표시한다.
 	 */
 	private async scanWorkspaceAnnotations (forceRescan = false): Promise<void> {
-		const files = await vscode.workspace.findFiles ('**/*.{c,h}', '**/build/**', 500);
+		const files = await vscode.workspace.findFiles (WORKSPACE_SCAN_GLOB, WORKSPACE_SCAN_EXCLUDE, MAX_WORKSPACE_SCAN_FILES);
 		const tagPattern = /@(bookmark|todo|review|warn|breakpoint|region|endregion)\b/;
 
 		for (const fileUri of files) {
@@ -1296,7 +1309,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				for (const uri of event.uris) {
 					if (uri.scheme !== 'file') { continue; }
 					const filePath = uri.fsPath;
-					if (!filePath.endsWith ('.c') && !filePath.endsWith ('.h')) { continue; }
+					if (!/\.[ch]$/.test (filePath)) { continue; }
 					this._warnPendingUris.add (uri.toString ());
 				}
 
@@ -1305,7 +1318,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					const uris = [...this._warnPendingUris];
 					this._warnPendingUris.clear ();
 					this.syncVirtualWarns (uris);
-				}, 2000);
+				}, WARN_DEBOUNCE_MS);
 			})
 		);
 	}
@@ -1332,7 +1345,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			);
 
 			// 현재 에러들을 가상 @warn으로 추가 (파일당 최대 20개)
-			const limited = errors.slice (0, 20);
+			const limited = errors.slice (0, MAX_VIRTUAL_WARNS_PER_FILE);
 			for (const diag of limited) {
 				const msg = diag.message.replace (/\n/g, ' ').substring (0, 100);
 				const source = diag.source ? `[${diag.source}] ` : '';
@@ -1404,7 +1417,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		try {
 			const { stdout: diffOutput } = await execAsync (
 				`git diff ${oldHead}..${newHead} --unified=0 --diff-filter=AM -- '*.c' '*.h'`,
-				{ cwd: root, maxBuffer: 1024 * 1024 * 10 }
+				{ cwd: root, maxBuffer: MAX_BUFFER }
 			);
 
 			if (!diffOutput.trim ()) { return; }
@@ -1464,6 +1477,191 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		} catch (err) {
 			console.error ('[Annotation] Auto-review error:', err);
 		}
+	}
+
+	// ──────────────────────────────────────────
+	// Review Check (리뷰 확인) — 커밋 선택 후 리뷰 태그 일괄 재생성
+	// ──────────────────────────────────────────
+
+	async checkReviews (): Promise<void> {
+		const root = this.config.getWorkspaceRoot ();
+		if (!root) {
+			vscode.window.showWarningMessage ('[Annotation] 워크스페이스를 찾을 수 없습니다.');
+			return;
+		}
+
+		// 현재 브랜치의 커밋 이력 가져오기
+		let logOutput = '';
+		try {
+			const { stdout } = await execAsync (
+				'git log --oneline -30',
+				{ cwd: root }
+			);
+			logOutput = stdout.trim ();
+		} catch {
+			vscode.window.showWarningMessage ('[Annotation] Git 커밋 이력을 가져올 수 없습니다.');
+			return;
+		}
+
+		if (!logOutput) {
+			vscode.window.showInformationMessage ('[Annotation] 커밋 이력이 없습니다.');
+			return;
+		}
+
+		// QuickPick으로 커밋 선택
+		const commits = logOutput.split ('\n').map ((line) => {
+			const spaceIdx = line.indexOf (' ');
+			const hash = line.substring (0, spaceIdx);
+			const message = line.substring (spaceIdx + 1);
+			return { hash, message };
+		});
+
+		const selected = await vscode.window.showQuickPick (
+			commits.map ((c) => ({
+				label: `$(git-commit) ${c.hash.substring (0, 7)}`,
+				description: c.message,
+				detail: c.hash,
+			})),
+			{
+				placeHolder: '리뷰를 생성할 커밋을 선택하세요',
+				title: '리뷰 확인 — 커밋 선택',
+			}
+		);
+
+		if (!selected) { return; }
+
+		const commitHash = selected.detail!;
+
+		await vscode.window.withProgress (
+			{
+				location: vscode.ProgressLocation.Notification,
+				title: '[Annotation] 리뷰 태그 생성 중...',
+				cancellable: false,
+			},
+			async () => {
+				try {
+					// 선택된 커밋의 diff 가져오기 (부모 대비 추가된 코드만)
+					const { stdout: diffOutput } = await execAsync (
+						`git diff ${commitHash}^..${commitHash} --unified=0 --diff-filter=AM -- '*.c' '*.h'`,
+						{ cwd: root, maxBuffer: MAX_BUFFER }
+					);
+
+					if (!diffOutput.trim ()) {
+						vscode.window.showInformationMessage ('[Annotation] 해당 커밋에 추가된 C/H 코드가 없습니다.');
+						return;
+					}
+
+					// 커밋 작성자 정보
+					const { stdout: authorOut } = await execAsync (
+						`git log -1 --format="%an" ${commitHash}`,
+						{ cwd: root }
+					);
+					const commitAuthor = authorOut.trim ();
+
+					const additions = this.parseDiffAdditions (diffOutput);
+					if (additions.length === 0) {
+						vscode.window.showInformationMessage ('[Annotation] 해당 커밋에 함수/변수 추가가 감지되지 않았습니다.');
+						return;
+					}
+
+					let addedCount = 0;
+					let skippedCount = 0;
+
+					for (const add of additions) {
+						// 이미 해당 위치에 review 태그가 있으면 스킵
+						const exists = this.annotations.some (
+							(a) => a.file === add.file && a.line === add.line && a.type === 'review'
+						);
+						if (exists) {
+							skippedCount++;
+							continue;
+						}
+
+						let description = '';
+						try {
+							description = await this.generateAIDescription (add, root);
+						} catch { /* AI 실패 시 Doxygen fallback */ }
+
+						if (!description) {
+							description = this.generateDoxygenDescription (add);
+						}
+
+						this.annotations.push ({
+							id: `vreview-${add.file}:${add.line}:${Date.now ()}`,
+							type: 'review',
+							file: add.file,
+							line: add.line,
+							content: `[${commitAuthor}] ${description}`,
+							displayLabel: null,
+							createdAt: new Date ().toISOString (),
+							commitHash,
+							author: commitAuthor,
+							virtual: true,
+						});
+						addedCount++;
+					}
+
+					if (addedCount > 0) {
+						this.saveAnnotations ();
+						this.updateAllDecorations ();
+						this._onDidChangeTreeData.fire ();
+					}
+
+					const msg = addedCount > 0
+						? `[Annotation] @review ${addedCount}개 생성 (${skippedCount}개 기존 유지)`
+						: `[Annotation] 모든 위치에 이미 리뷰가 있습니다 (${skippedCount}개 기존 유지)`;
+					vscode.window.showInformationMessage (msg);
+				} catch (err: any) {
+					// 최초 커밋인 경우 부모가 없으므로 --root 사용
+					if (err.message?.includes ('unknown revision')) {
+						try {
+							const { stdout: rootDiff } = await execAsync (
+								`git show ${commitHash} --unified=0 --diff-filter=AM -- ${DIFF_FILE_EXTENSIONS}`,
+								{ cwd: root, maxBuffer: MAX_BUFFER }
+							);
+							if (!rootDiff.trim ()) {
+								vscode.window.showInformationMessage ('[Annotation] 해당 커밋에 추가된 C/H 코드가 없습니다.');
+								return;
+							}
+							const { stdout: rootAuthorOut } = await execAsync (
+								`git log -1 --format="%an" ${commitHash}`,
+								{ cwd: root }
+							);
+							const rootAuthor = rootAuthorOut.trim ();
+							const rootAdditions = this.parseDiffAdditions (rootDiff);
+							let rootAdded = 0;
+							for (const add of rootAdditions) {
+								const exists = this.annotations.some (
+									(a) => a.file === add.file && a.line === add.line && a.type === 'review'
+								);
+								if (exists) { continue; }
+								let description = '';
+								try { description = await this.generateAIDescription (add, root); } catch { /* AI 실패 */ }
+								if (!description) { description = this.generateDoxygenDescription (add); }
+								this.annotations.push ({
+									id: `vreview-${add.file}:${add.line}:${Date.now ()}`,
+									type: 'review', file: add.file, line: add.line,
+									content: `[${rootAuthor}] ${description}`,
+									displayLabel: null, createdAt: new Date ().toISOString (),
+									commitHash, author: rootAuthor, virtual: true,
+								});
+								rootAdded++;
+							}
+							if (rootAdded > 0) {
+								this.saveAnnotations ();
+								this.updateAllDecorations ();
+								this._onDidChangeTreeData.fire ();
+							}
+							vscode.window.showInformationMessage (`[Annotation] 최초 커밋: @review ${rootAdded}개 생성`);
+						} catch {
+							vscode.window.showErrorMessage ('[Annotation] 리뷰 생성 실패: diff를 가져올 수 없습니다.');
+						}
+					} else {
+						vscode.window.showErrorMessage (`[Annotation] 리뷰 생성 실패: ${err.message || err}`);
+					}
+				}
+			}
+		);
 	}
 
 	// ──────────────────────────────────────────
@@ -1600,8 +1798,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			const filePath = path.join (root, add.file);
 			if (fs.existsSync (filePath)) {
 				const fileLines = fs.readFileSync (filePath, 'utf-8').split ('\n');
-				const start = Math.max (0, add.line - 10);
-				const end = Math.min (fileLines.length, add.line + 10);
+				const start = Math.max (0, add.line - AI_MAX_CONTEXT_LINES);
+				const end = Math.min (fileLines.length, add.line + AI_MAX_CONTEXT_LINES);
 				context = fileLines.slice (start, end).join ('\n');
 			}
 		} catch { /* ignore */ }
@@ -1755,23 +1953,23 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 	private static readonly DEFAULT_SHORTCUTS: ShortcutEntry[] = [
 		// 디버그 단축키
-		{ id: 'debug.start',       label: '디버그 시작',              command: 'workbench.action.debug.start',      key: 'f5',          mac: 'f5' },
-		{ id: 'debug.stepOver',    label: '디버그 Step Over',         command: 'workbench.action.debug.stepOver',   key: 'f6',          mac: 'f6' },
-		{ id: 'debug.stepInto',    label: '디버그 Step Into',         command: 'workbench.action.debug.stepInto',   key: 'f7',          mac: 'f7' },
-		{ id: 'debug.continue',    label: '디버그 Continue',          command: 'workbench.action.debug.continue',   key: 'f8',          mac: 'f8' },
-		{ id: 'debug.toggleBP',    label: '브레이크포인트 토글',      command: 'editor.debug.action.toggleBreakpoint', key: 'f11',      mac: 'f11' },
+		{ id: 'debug.start',       label: '디버그 시작',              description: '디버그 세션을 시작합니다',                       command: 'workbench.action.debug.start',      key: 'f5',          mac: 'f5' },
+		{ id: 'debug.stepOver',    label: '디버그 Step Over',         description: '현재 줄을 실행하고 다음 줄로 이동',              command: 'workbench.action.debug.stepOver',   key: 'f6',          mac: 'f6' },
+		{ id: 'debug.stepInto',    label: '디버그 Step Into',         description: '함수 내부로 진입하여 한 줄씩 실행',              command: 'workbench.action.debug.stepInto',   key: 'f7',          mac: 'f7' },
+		{ id: 'debug.continue',    label: '디버그 Continue',          description: '다음 브레이크포인트까지 실행 계속',              command: 'workbench.action.debug.continue',   key: 'f8',          mac: 'f8' },
+		{ id: 'debug.toggleBP',    label: '브레이크포인트 토글',      description: '현재 줄에 브레이크포인트 설정/해제',              command: 'editor.debug.action.toggleBreakpoint', key: 'f11',      mac: 'f11' },
 		// 에디터 네비게이션
-		{ id: 'nav.prevEditor',    label: '이전 에디터 탭',           command: 'workbench.action.previousEditor',   key: 'cmd+[',       mac: 'cmd+[' },
-		{ id: 'nav.nextEditor',    label: '다음 에디터 탭',           command: 'workbench.action.nextEditor',       key: 'cmd+]',       mac: 'cmd+]' },
+		{ id: 'nav.prevEditor',    label: '이전 에디터 탭',           description: '이전 에디터 탭으로 전환',                        command: 'workbench.action.previousEditor',   key: 'cmd+[',       mac: 'cmd+[' },
+		{ id: 'nav.nextEditor',    label: '다음 에디터 탭',           description: '다음 에디터 탭으로 전환',                        command: 'workbench.action.nextEditor',       key: 'cmd+]',       mac: 'cmd+]' },
 		// 코드 접기/펼치기
-		{ id: 'fold.fold',         label: '코드 접기',                command: 'editor.fold',                       key: 'cmd+shift+[', mac: 'cmd+shift+[' },
-		{ id: 'fold.unfold',       label: '코드 펼치기',              command: 'editor.unfold',                     key: 'cmd+shift+]', mac: 'cmd+shift+]' },
+		{ id: 'fold.fold',         label: '코드 접기',                description: '현재 블록을 접어서 숨기기',                      command: 'editor.fold',                       key: 'cmd+shift+[', mac: 'cmd+shift+[' },
+		{ id: 'fold.unfold',       label: '코드 펼치기',              description: '접힌 블록을 다시 펼치기',                        command: 'editor.unfold',                     key: 'cmd+shift+]', mac: 'cmd+shift+]' },
 		// 유틸리티
-		{ id: 'util.selectAll',    label: '전체 선택',                command: 'editor.action.selectAll',           key: 'alt+a',       mac: 'alt+a' },
-		{ id: 'util.findRefs',     label: '참조 찾기',                command: 'editor.action.referenceSearch.trigger', key: 'alt+f7',  mac: 'alt+f7' },
+		{ id: 'util.selectAll',    label: '전체 선택',                description: '현재 파일의 모든 텍스트 선택',                   command: 'editor.action.selectAll',           key: 'alt+a',       mac: 'alt+a' },
+		{ id: 'util.findRefs',     label: '참조 찾기',                description: '현재 심볼의 모든 참조 위치 검색',                command: 'editor.action.referenceSearch.trigger', key: 'alt+f7',  mac: 'alt+f7' },
 		// 태그 네비게이션 (참조용 — package.json keybinding으로 등록, applyKeybindings에서 스킵)
-		{ id: 'annotation.prevTag',    label: '이전 태그로 이동',     command: 'jungleKit.prevTag',                 key: 'alt+[',       mac: 'alt+[' },
-		{ id: 'annotation.nextTag',    label: '다음 태그로 이동',     command: 'jungleKit.nextTag',                 key: 'alt+]',       mac: 'alt+]' },
+		{ id: 'annotation.prevTag',    label: '이전 태그로 이동',     description: '이전 어노테이션 태그로 커서 이동',               command: 'jungleKit.prevTag',                 key: 'alt+[',       mac: 'alt+[' },
+		{ id: 'annotation.nextTag',    label: '다음 태그로 이동',     description: '다음 어노테이션 태그로 커서 이동',               command: 'jungleKit.nextTag',                 key: 'alt+]',       mac: 'alt+]' },
 	];
 
 	private getKeybindingsFilePath (): string {
@@ -1804,100 +2002,487 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		fs.writeFileSync (filePath, JSON.stringify ({ version: 1, shortcuts }, null, 2));
 	}
 
+	private shortcutPanel: vscode.WebviewPanel | undefined;
+
 	async configureShortcuts (): Promise<void> {
-		const shortcuts = this.loadShortcutSettings ();
-
-		// 그룹별 구분자 삽입
-		const items: vscode.QuickPickItem[] = [];
-		let lastGroup = '';
-		for (const s of shortcuts) {
-			const group = s.id.split ('.')[0];
-			if (group !== lastGroup) {
-				const groupLabels: Record<string, string> = {
-					debug: '디버그', nav: '에디터 네비게이션',
-					fold: '코드 접기/펼치기', util: '유틸리티',
-				};
-				items.push ({
-					label: `$(symbol-folder) ${groupLabels[group] || group}`,
-					kind: vscode.QuickPickItemKind.Separator,
-				});
-				lastGroup = group;
-			}
-			items.push ({
-				label: s.label,
-				description: `현재: ${s.mac || s.key}`,
-				detail: s.command,
-			});
-		}
-
-		items.push ({
-			label: '$(check) 현재 설정 적용',
-			description: 'VS Code 단축키에 반영합니다',
-			detail: '_apply_',
-		});
-
-		items.push ({
-			label: '$(discard) 기본값으로 초기화',
-			description: '모든 단축키를 기본값으로 되돌립니다',
-			detail: '_reset_',
-		});
-
-		const selected = await vscode.window.showQuickPick (items, {
-			placeHolder: '변경할 단축키를 선택하세요',
-			title: 'Annotation 단축키 설정',
-		});
-
-		if (!selected) { return; }
-
-		if (selected.detail === '_apply_') {
-			this.applyKeybindings ();
-			vscode.window.showInformationMessage ('[Annotation] 단축키가 적용되었습니다.');
+		// Re-use existing panel if already open
+		if (this.shortcutPanel) {
+			this.shortcutPanel.reveal (vscode.ViewColumn.One);
 			return;
 		}
 
-		if (selected.detail === '_reset_') {
-			this.saveShortcutSettings ([...TagSystem.DEFAULT_SHORTCUTS]);
-			this.applyKeybindings ();
-			vscode.window.showInformationMessage ('[Annotation] 단축키가 기본값으로 초기화되었습니다.');
-			return;
-		}
-
-		// 단축키 변경
-		const entry = shortcuts.find ((s) => s.command === selected.detail);
-		if (!entry) { return; }
-
-		const newKey = await vscode.window.showInputBox ({
-			prompt: `"${entry.label}"의 새 단축키를 입력하세요 (예: ctrl+shift+f5, cmd+k)`,
-			value: entry.mac || entry.key,
-			placeHolder: 'ctrl+shift+f5',
-			validateInput: (value) => {
-				if (!value.trim ()) { return '단축키를 입력하세요.'; }
-				// 기본적인 단축키 형식 검증
-				const parts = value.toLowerCase ().split ('+');
-				const validModifiers = ['ctrl', 'cmd', 'alt', 'shift', 'meta'];
-				const validKeys = parts.filter ((p) => !validModifiers.includes (p));
-				if (validKeys.length !== 1) { return '수식키 + 키 하나 형식으로 입력하세요 (예: alt+f7)'; }
-				return undefined;
-			},
-		});
-
-		if (newKey === undefined) { return; } // ESC
-
-		entry.key = newKey.trim ().toLowerCase ();
-		entry.mac = newKey.trim ().toLowerCase ();
-		this.saveShortcutSettings (shortcuts);
-
-		const apply = await vscode.window.showQuickPick (
-			['예, 지금 적용', '아니요, 나중에'],
-			{ placeHolder: '변경된 단축키를 지금 VS Code에 적용할까요?' }
+		const panel = vscode.window.createWebviewPanel (
+			'jungleKit.shortcutSettings',
+			'Annotation 단축키 설정',
+			vscode.ViewColumn.One,
+			{ enableScripts: true, retainContextWhenHidden: true }
 		);
 
-		if (apply === '예, 지금 적용') {
-			this.applyKeybindings ();
-			vscode.window.showInformationMessage ('[Annotation] 단축키가 적용되었습니다.');
-		} else {
-			vscode.window.showInformationMessage ('[Annotation] 단축키가 저장되었습니다. 다음 VS Code 시작 시 자동 적용됩니다.');
-		}
+		this.shortcutPanel = panel;
+
+		const shortcuts = this.loadShortcutSettings ();
+		panel.webview.html = this.getShortcutWebviewContent (shortcuts);
+
+		panel.onDidDispose (() => {
+			this.shortcutPanel = undefined;
+		});
+
+		panel.webview.onDidReceiveMessage ((message) => {
+			switch (message.command) {
+			case 'save': {
+				const updated: ShortcutEntry[] = message.shortcuts;
+				this.saveShortcutSettings (updated);
+				this.applyKeybindings ();
+				vscode.window.showInformationMessage ('[Annotation] 단축키가 적용되었습니다.');
+				break;
+			}
+			case 'reset': {
+				const defaults = [...TagSystem.DEFAULT_SHORTCUTS];
+				this.saveShortcutSettings (defaults);
+				this.applyKeybindings ();
+				panel.webview.postMessage ({ command: 'updateShortcuts', shortcuts: defaults });
+				vscode.window.showInformationMessage ('[Annotation] 단축키가 기본값으로 초기화되었습니다.');
+				break;
+			}
+			}
+		});
+	}
+
+	private getShortcutWebviewContent (shortcuts: ShortcutEntry[]): string {
+		const groupLabels: Record<string, string> = {
+			debug: '디버그',
+			nav: '에디터 네비게이션',
+			fold: '코드 접기/펼치기',
+			util: '유틸리티',
+			annotation: '어노테이션',
+		};
+
+		const shortcutsJson = JSON.stringify (shortcuts);
+
+		return /* html */ `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+    font-size: var(--vscode-font-size, 13px);
+    color: var(--vscode-foreground);
+    background: var(--vscode-editor-background);
+    padding: 20px 28px;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, rgba(128,128,128,0.2)));
+  }
+  .header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--vscode-foreground);
+  }
+  .header-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn-primary {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+  }
+  .btn-primary:hover {
+    background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+  }
+  .btn-secondary {
+    background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  }
+  .btn-secondary:hover {
+    background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.3));
+  }
+
+  /* Section */
+  .section {
+    margin-bottom: 20px;
+  }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 2px;
+    background: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.1));
+    border-radius: 6px 6px 0 0;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
+  }
+  .section-icon {
+    font-size: 14px;
+  }
+
+  /* Table */
+  .shortcut-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--vscode-editor-background);
+    border: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.2));
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    overflow: hidden;
+  }
+  .shortcut-table th {
+    text-align: left;
+    padding: 8px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--vscode-descriptionForeground, rgba(128,128,128,0.8));
+    background: var(--vscode-editor-background);
+    border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.15));
+  }
+  .shortcut-table td {
+    padding: 8px 12px;
+    vertical-align: middle;
+    border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.08));
+  }
+  .shortcut-table tr:last-child td {
+    border-bottom: none;
+  }
+  .shortcut-table tr:hover td {
+    background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.08));
+  }
+
+  /* Label column */
+  .sc-label {
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .sc-desc {
+    color: var(--vscode-descriptionForeground, rgba(128,128,128,0.7));
+    font-size: 12px;
+  }
+
+  /* Key badge */
+  .key-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    cursor: default;
+  }
+  .key-part {
+    display: inline-block;
+    padding: 2px 7px;
+    min-width: 22px;
+    text-align: center;
+    font-size: 11px;
+    font-family: var(--vscode-editor-font-family, 'SF Mono', 'Fira Code', monospace);
+    font-weight: 500;
+    line-height: 18px;
+    color: var(--vscode-foreground);
+    background: var(--vscode-badge-background, rgba(128,128,128,0.15));
+    border: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.25));
+    border-radius: 4px;
+    box-shadow: 0 1px 0 var(--vscode-widget-border, rgba(0,0,0,0.15));
+  }
+  .key-separator {
+    color: var(--vscode-descriptionForeground, rgba(128,128,128,0.5));
+    font-size: 10px;
+    margin: 0 1px;
+  }
+
+  /* Edit button */
+  .btn-edit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground, rgba(128,128,128,0.6));
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.15s;
+  }
+  .btn-edit:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15));
+    color: var(--vscode-foreground);
+    border-color: var(--vscode-widget-border, rgba(128,128,128,0.3));
+  }
+
+  /* Inline edit input */
+  .key-edit-input {
+    width: 160px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    color: var(--vscode-input-foreground, var(--vscode-foreground));
+    background: var(--vscode-input-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-focusBorder, #007acc);
+    border-radius: 4px;
+    outline: none;
+  }
+  .key-edit-input:focus {
+    border-color: var(--vscode-focusBorder, #007acc);
+    box-shadow: 0 0 0 1px var(--vscode-focusBorder, #007acc);
+  }
+  .edit-actions {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: 6px;
+  }
+  .btn-confirm, .btn-cancel {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .btn-confirm {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+  }
+  .btn-cancel {
+    background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  }
+
+  /* Validation error */
+  .validation-error {
+    color: var(--vscode-errorForeground, #f44747);
+    font-size: 11px;
+    margin-top: 4px;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 10px 18px;
+    background: var(--vscode-notifications-background, #252526);
+    color: var(--vscode-notifications-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-notifications-border, rgba(128,128,128,0.3));
+    border-radius: 6px;
+    font-size: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.25s;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .toast.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Column widths */
+  .col-label { width: 25%; }
+  .col-desc  { width: 35%; }
+  .col-key   { width: 30%; }
+  .col-edit  { width: 10%; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>Annotation 단축키 설정</h1>
+    <div class="header-actions">
+      <button class="btn btn-secondary" id="resetBtn" title="모든 단축키를 기본값으로 되돌립니다">
+        <span>&#x21BA;</span> 초기화
+      </button>
+      <button class="btn btn-primary" id="applyBtn" title="변경된 단축키를 VS Code에 적용합니다">
+        <span>&#x2713;</span> 적용
+      </button>
+    </div>
+  </div>
+
+  <div id="content"></div>
+  <div class="toast" id="toast"></div>
+
+<script>
+  const vscode = acquireVsCodeApi();
+  const sectionIcons = {
+    debug: '&#x1F41E;',
+    nav: '&#x2194;',
+    fold: '&#x25B6;',
+    util: '&#x2699;',
+    annotation: '&#x1F3F7;'
+  };
+  const groupLabels = ${JSON.stringify (Object.fromEntries (Object.entries (groupLabels)))};
+
+  let shortcuts = ${shortcutsJson};
+  let editingId = null;
+
+  function renderKeyBadge(keyStr) {
+    const parts = keyStr.split('+');
+    return parts.map((p, i) => {
+      const display = p.replace('cmd', '\\u2318').replace('ctrl', 'Ctrl').replace('alt', '\\u2325').replace('shift', '\\u21E7').replace('meta', '\\u2318');
+      const sep = i < parts.length - 1 ? '<span class="key-separator">+</span>' : '';
+      return '<span class="key-part">' + display + '</span>' + sep;
+    }).join('');
+  }
+
+  function validateKey(value) {
+    if (!value.trim()) return '단축키를 입력하세요.';
+    const parts = value.toLowerCase().split('+');
+    const validModifiers = ['ctrl', 'cmd', 'alt', 'shift', 'meta'];
+    const validKeys = parts.filter(p => !validModifiers.includes(p));
+    if (validKeys.length !== 1) return '수식키 + 키 하나 형식으로 입력하세요 (예: alt+f7)';
+    return null;
+  }
+
+  function render() {
+    const groups = {};
+    const groupOrder = [];
+    shortcuts.forEach(s => {
+      const g = s.id.split('.')[0];
+      if (!groups[g]) { groups[g] = []; groupOrder.push(g); }
+      groups[g].push(s);
+    });
+
+    let html = '';
+    groupOrder.forEach(g => {
+      const label = groupLabels[g] || g;
+      const icon = sectionIcons[g] || '&#x1F4C1;';
+      html += '<div class="section">';
+      html += '<div class="section-header"><span class="section-icon">' + icon + '</span> ' + label + '</div>';
+      html += '<table class="shortcut-table"><thead><tr>';
+      html += '<th class="col-label">단축키</th>';
+      html += '<th class="col-desc">설명</th>';
+      html += '<th class="col-key">키 바인딩</th>';
+      html += '<th class="col-edit"></th>';
+      html += '</tr></thead><tbody>';
+
+      groups[g].forEach(s => {
+        const key = s.mac || s.key;
+        const isEditing = editingId === s.id;
+        html += '<tr data-id="' + s.id + '">';
+        html += '<td class="sc-label">' + s.label + '</td>';
+        html += '<td class="sc-desc">' + (s.description || '') + '</td>';
+        if (isEditing) {
+          html += '<td colspan="2">';
+          html += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">';
+          html += '<input type="text" class="key-edit-input" id="editInput" value="' + key + '" autofocus />';
+          html += '<div class="edit-actions">';
+          html += '<button class="btn-confirm" onclick="confirmEdit()" title="확인">&#x2713;</button>';
+          html += '<button class="btn-cancel" onclick="cancelEdit()" title="취소">&#x2717;</button>';
+          html += '</div>';
+          html += '</div>';
+          html += '<div class="validation-error" id="editError"></div>';
+          html += '</td>';
+        } else {
+          html += '<td><span class="key-badge">' + renderKeyBadge(key) + '</span></td>';
+          html += '<td class="col-edit"><button class="btn-edit" onclick="startEdit(\'' + s.id + '\')" title="수정">&#x270E;</button></td>';
+        }
+        html += '</tr>';
+      });
+
+      html += '</tbody></table></div>';
+    });
+
+    document.getElementById('content').innerHTML = html;
+
+    if (editingId) {
+      const input = document.getElementById('editInput');
+      if (input) {
+        input.focus();
+        input.select();
+        input.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') { e.preventDefault(); confirmEdit(); }
+          if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+        });
+      }
+    }
+  }
+
+  function startEdit(id) {
+    editingId = id;
+    render();
+  }
+
+  function cancelEdit() {
+    editingId = null;
+    render();
+  }
+
+  function confirmEdit() {
+    const input = document.getElementById('editInput');
+    if (!input) return;
+    const value = input.value.trim().toLowerCase();
+    const error = validateKey(value);
+    if (error) {
+      document.getElementById('editError').textContent = error;
+      return;
+    }
+    const entry = shortcuts.find(s => s.id === editingId);
+    if (entry) {
+      entry.key = value;
+      entry.mac = value;
+    }
+    editingId = null;
+    render();
+    showToast('단축키가 변경되었습니다. "적용" 버튼을 눌러 VS Code에 반영하세요.');
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('visible');
+    setTimeout(() => t.classList.remove('visible'), 3000);
+  }
+
+  document.getElementById('applyBtn').addEventListener('click', () => {
+    vscode.postMessage({ command: 'save', shortcuts: shortcuts });
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    vscode.postMessage({ command: 'reset' });
+  });
+
+  window.addEventListener('message', event => {
+    const msg = event.data;
+    if (msg.command === 'updateShortcuts') {
+      shortcuts = msg.shortcuts;
+      editingId = null;
+      render();
+    }
+  });
+
+  render();
+</script>
+</body>
+</html>`;
 	}
 
 	private applyKeybindings (): void {
