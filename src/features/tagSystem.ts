@@ -4,6 +4,7 @@ import * as path from 'path';
 import { exec as execCb, execSync } from 'child_process';
 import { promisify } from 'util';
 import { ConfigManager, DIFF_FILE_EXTENSIONS, DIFF_FILE_RE } from '../utils/configManager';
+import { sanitizeRef } from '../utils/gitUtils';
 import { APIKeyManager } from '../utils/apiKeyManager';
 
 const execAsync = promisify (execCb);
@@ -1415,14 +1416,14 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		try {
 			const { stdout: diffOutput } = await execAsync (
-				`git diff ${oldHead}..${newHead} --unified=0 --diff-filter=AM -- ${DIFF_FILE_EXTENSIONS}`,
+				`git diff ${sanitizeRef (oldHead)}..${sanitizeRef (newHead)} --unified=0 --diff-filter=AM -- ${DIFF_FILE_EXTENSIONS}`,
 				{ cwd: root, maxBuffer: MAX_BUFFER }
 			);
 
 			if (!diffOutput.trim ()) { return; }
 
 			const { stdout: authorOut } = await execAsync (
-				`git log -1 --format="%an" ${newHead}`,
+				`git log -1 --format="%an" ${sanitizeRef (newHead)}`,
 				{ cwd: root }
 			);
 			const commitAuthor = authorOut.trim ();
@@ -1541,7 +1542,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				try {
 					// 선택된 커밋의 diff 가져오기 (부모 대비 추가된 코드만)
 					const { stdout: diffOutput } = await execAsync (
-						`git diff ${commitHash}^..${commitHash} --unified=0 --diff-filter=AM -- ${DIFF_FILE_EXTENSIONS}`,
+						`git diff ${sanitizeRef (commitHash)}^..${sanitizeRef (commitHash)} --unified=0 --diff-filter=AM -- ${DIFF_FILE_EXTENSIONS}`,
 						{ cwd: root, maxBuffer: MAX_BUFFER }
 					);
 
@@ -1552,7 +1553,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 					// 커밋 작성자 정보
 					const { stdout: authorOut } = await execAsync (
-						`git log -1 --format="%an" ${commitHash}`,
+						`git log -1 --format="%an" ${sanitizeRef (commitHash)}`,
 						{ cwd: root }
 					);
 					const commitAuthor = authorOut.trim ();
@@ -1615,7 +1616,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					if (err.message?.includes ('unknown revision')) {
 						try {
 							const { stdout: rootDiff } = await execAsync (
-								`git show ${commitHash} --unified=0 --diff-filter=AM -- ${DIFF_FILE_EXTENSIONS}`,
+								`git show ${sanitizeRef (commitHash)} --unified=0 --diff-filter=AM -- ${DIFF_FILE_EXTENSIONS}`,
 								{ cwd: root, maxBuffer: MAX_BUFFER }
 							);
 							if (!rootDiff.trim ()) {
@@ -1623,7 +1624,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 								return;
 							}
 							const { stdout: rootAuthorOut } = await execAsync (
-								`git log -1 --format="%an" ${commitHash}`,
+								`git log -1 --format="%an" ${sanitizeRef (commitHash)}`,
 								{ cwd: root }
 							);
 							const rootAuthor = rootAuthorOut.trim ();

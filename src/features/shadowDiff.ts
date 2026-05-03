@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { GitUtils } from '../utils/gitUtils';
+import { GitUtils, sanitizeRef } from '../utils/gitUtils';
 import { ConfigManager, DIFF_FILE_EXTENSIONS } from '../utils/configManager';
 
 const execAsync = promisify (exec);
@@ -110,7 +110,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 					{ location: vscode.ProgressLocation.Notification, title: 'Push 중...' },
 					async () => {
 						const root = this.config.getWorkspaceRoot ();
-						await execAsync (`git push origin ${branch}`, { cwd: root });
+						await execAsync (`git push origin ${sanitizeRef (branch)}`, { cwd: root });
 					}
 				);
 				vscode.window.showInformationMessage ('Push 완료');
@@ -154,7 +154,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 			try {
 				// Get diff between current branch and remote branch (only C/H files)
 				const { stdout: diffOutput } = await execAsync (
-					`git diff ${currentBranch}...${remoteBranch} -- ${DIFF_FILE_EXTENSIONS} 2>/dev/null`,
+					`git diff ${sanitizeRef (currentBranch)}...${sanitizeRef (remoteBranch)} -- ${DIFF_FILE_EXTENSIONS} 2>/dev/null`,
 					{ cwd: root, maxBuffer: MAX_BUFFER }
 				);
 
@@ -162,14 +162,14 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 
 				// Get author of the branch
 				const { stdout: authorOutput } = await execAsync (
-					`git log ${remoteBranch} -1 --format="%an"`,
+					`git log ${sanitizeRef (remoteBranch)} -1 --format="%an"`,
 					{ cwd: root }
 				);
 				const author = authorOutput.trim ();
 
 				// Get last commit date
 				const { stdout: dateOutput } = await execAsync (
-					`git log ${remoteBranch} -1 --format="%ar"`,
+					`git log ${sanitizeRef (remoteBranch)} -1 --format="%ar"`,
 					{ cwd: root }
 				);
 
