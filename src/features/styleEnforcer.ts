@@ -155,12 +155,31 @@ export class StyleEnforcer {
 	): vscode.Diagnostic[] {
 		const diags: vscode.Diagnostic[] = [];
 		const lines = output.split ('\n');
+		// 어노테이션 블록 주석이 차지하는 줄 번호를 수집 (스타일 검사 제외 대상)
+		const skipLines = new Set<number> ();
+		const tagRe = /@(todo|bookmark|review|warn|breakpoint|note|region|endregion)\b/;
+		for (let i = 0; i < doc.lineCount; i++) {
+			const text = doc.lineAt (i).text;
+			if (!tagRe.test (text)) { continue; }
+			skipLines.add (i);
+			// 블록 주석 시작이면 */ 까지 전부 제외
+			if (/\/\*/.test (text) && !/\*\//.test (text)) {
+				for (let j = i + 1; j < Math.min (i + 30, doc.lineCount); j++) {
+					skipLines.add (j);
+					if (/\*\//.test (doc.lineAt (j).text)) { break; }
+				}
+			}
+		}
 
 		for (const line of lines) {
 			// clang-format warnings: filename:line:col: warning: ...
 			const match = line.match (/:(\d+):(\d+):\s*(warning|error):\s*(.*)/);
 			if (match) {
 				const lineNum = parseInt (match[1]) - 1;
+				// 어노테이션 태그가 있는 줄은 스타일 검사에서 제외
+				if (skipLines.has (lineNum)) {
+					continue;
+				}
 				const col = parseInt (match[2]) - 1;
 				const severity =
 					match[3] === 'error'
