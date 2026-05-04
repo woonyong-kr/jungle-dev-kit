@@ -235,22 +235,25 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 			return;
 		}
 
-		// Check if gh is installed — 없으면 자동 설치
+		// Check if gh is installed — 없으면 GitHub Releases에서 바이너리 직접 설치
 		try {
 			await execAsync ('gh --version', { cwd: root });
 		} catch {
 			panel.webview.postMessage ({ command: 'status', text: 'GitHub CLI(gh) 설치 중...' });
 			try {
-				await execAsync (
-					'sudo apt-get update -qq && sudo apt-get install -y -qq gh',
-					{ cwd: root, maxBuffer: 10 * 1024 * 1024, timeout: 60000 }
-				);
+				const installCmd = [
+					'GH_VERSION=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | grep \'"tag_name"\' | sed \'s/.*"v\\(.*\\)".*/\\1/\')',
+					'curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz -C /tmp',
+					'sudo mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/',
+					'rm -rf "/tmp/gh_${GH_VERSION}_linux_amd64"',
+				].join (' && ');
+				await execAsync (installCmd, { cwd: root, maxBuffer: 10 * 1024 * 1024, timeout: 120000 });
 				await execAsync ('gh --version', { cwd: root });
 				vscode.window.showInformationMessage ('[Annotation] GitHub CLI(gh) 자동 설치 완료');
 			} catch {
 				panel.webview.postMessage ({
 					command: 'error',
-					text: 'gh 자동 설치에 실패했습니다. 터미널에서 수동 설치: sudo apt-get update && sudo apt-get install -y gh',
+					text: 'gh 자동 설치에 실패했습니다. 터미널에서 수동 설치:\ncurl -fsSL https://api.github.com/repos/cli/cli/releases/latest | grep tag_name 으로 버전 확인 후 바이너리를 다운로드하세요.',
 				});
 				return;
 			}
