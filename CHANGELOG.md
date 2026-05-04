@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.6] - 2025-05-05
+
+### Fixed
+- PR 생성 시 `git push`가 HTTPS 인증 프롬프트에서 무한 대기하는 문제 — `gh auth setup-git`으로 credential helper 자동 등록
+- `git push` / `gh pr create`에 timeout(30초) 추가하여 무응답 방지
+
 ## [0.18.5] - 2025-05-05
 
 ### Fixed

@@ -293,7 +293,9 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 
 		try {
 			const safeBranch = branch.replace (/[^a-zA-Z0-9_\-\/.]/g, '');
-			await execAsync (`git push -u origin ${safeBranch}`, { cwd: root });
+			// gh가 설치되어 있으면 credential helper로 등록 (HTTPS 인증 자동 처리)
+			try { await execAsync ('gh auth setup-git', { cwd: root, timeout: 10000 }); } catch { /* 무시 */ }
+			await execAsync (`git push -u origin ${safeBranch}`, { cwd: root, timeout: 30000 });
 		} catch (pushErr: any) {
 			const msg = pushErr.stderr || pushErr.message || '';
 			// "Everything up-to-date" 는 정상 — 이미 푸시된 상태
@@ -329,7 +331,7 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 				cmd += ` --reviewer "${safeReviewers}"`;
 			}
 
-			const { stdout } = await execAsync (cmd, { cwd: root });
+			const { stdout } = await execAsync (cmd, { cwd: root, timeout: 30000 });
 			const prUrl = stdout.trim ();
 
 			panel.webview.postMessage ({
