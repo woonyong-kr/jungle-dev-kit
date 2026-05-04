@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.17.0] - 2025-05-05
+
+### Fixed
+- `@region` 접기(folding) 시 닫는 마커(`@endregion`)가 표시되지 않던 버그 수정 — 정규식을 주석 패턴(`//`, `/* */`, `#`)에 앵커링
+- 사이드바 "전체 태그 삭제"(`clearAllTags`) 실행 시 디바운스 스캔 타이머가 삭제를 되돌리던 버그 수정 — 파일 편집 전후 `_scanTimer` 취소
+- 리뷰 어노테이션 삭제 시 사이드바 트리가 접히던 버그 수정 — `EventEmitter<TagTreeItem | undefined>` + `_userExpandState` 기반 expand/collapse 상태 보존
+- 빈 내용(태그만 있고 텍스트 없음)의 `@tag` 등록·삭제·스캔 동작 보장
+- `//`와 `/* */` 모든 주석 스타일에서 태그가 동일하게 동작하도록 수정
+- breakpoint 코드 줄 감지에서 `*ptr` 패턴이 블록 주석 continuation으로 잘못 인식되던 버그 수정
+
+### Changed
+- 초기화 코드에서 미사용 `reviews/`, `knowledge/` 디렉터리 생성 제거
+- README에서 `reviews/`, `knowledge/` 참조 삭제 및 "언제 어떤 태그를 쓰는가" 사용 시나리오 섹션 추가
+- 자동 리뷰 생성 동시 실행 방지 — `reviewInProgress` 플래그 추가
+
 ## [0.16.0] - 2025-05-04
 
 ### Changed
