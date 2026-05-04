@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { ConfigManager } from '../utils/configManager';
 
 const execAsync = promisify (exec);
+const execFileAsync = promisify (execFile);
 
 const PINTOS_CLANG_FORMAT = `# PintOS C Coding Style (GNU-based)
 # Auto-formatted on save (editor.formatOnSave: true)
@@ -77,11 +78,13 @@ export class StyleEnforcer {
 		const vscodeSetting = vscode.workspace.getConfiguration ('jungleKit');
 
 		if (vscodeSetting.get<boolean> ('style.autoCreateClangFormat', true)) {
-			// 매 활성화 시 강제 덮어쓰기 — 사용자 수정분도 최신 컨벤션으로 통일
-			fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
-			console.log (
-				'[Annotation] .clang-format 강제 동기화 (워크스페이스 루트)'
-			);
+			try {
+				// 매 활성화 시 강제 덮어쓰기 — 사용자 수정분도 최신 컨벤션으로 통일
+				fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
+				console.log ('[Annotation] .clang-format 강제 동기화 (워크스페이스 루트)');
+			} catch (err) {
+				console.warn ('[Annotation] .clang-format 쓰기 실패 (읽기 전용 파일시스템?):', err);
+			}
 		}
 
 		// 기존 .jungle-kit/styles/ 에 있던 파일 → 루트로 마이그레이션
@@ -135,9 +138,10 @@ export class StyleEnforcer {
 		if (!root) { return; }
 
 		try {
-			// 워크스페이스 루트의 .clang-format을 자동 감지하도록 cwd 설정
-			await execAsync (
-				`clang-format --dry-run --Werror "${doc.uri.fsPath}"`,
+			// execFile로 호출하여 shell injection 방지 (파일명을 인자 배열로 전달)
+			await execFileAsync (
+				'clang-format',
+				['--dry-run', '--Werror', doc.uri.fsPath],
 				{ cwd: root }
 			);
 			// No output = no violations

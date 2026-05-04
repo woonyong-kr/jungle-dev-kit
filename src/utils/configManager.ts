@@ -53,7 +53,6 @@ const DEFAULT_ENV: EnvConfig = {
 		qemu: true,
 		gdb: true,
 		make: true,
-		'pintos-activate': true,
 		'clang-format': true,
 		extensions: true,
 	},
@@ -87,38 +86,42 @@ export class ConfigManager {
 			return;
 		}
 
-		if (!fs.existsSync (this.configDir)) {
-			fs.mkdirSync (this.configDir, { recursive: true });
-		}
-
-		// Create config.json
-		const configPath = path.join (this.configDir, 'config.json');
-		if (!fs.existsSync (configPath)) {
-			const config: JungleKitConfig = {
-				project: 'pintos',
-				convention: DEFAULT_CONVENTION,
-				env: DEFAULT_ENV,
-				style: {
-					autoCreateClangFormat: true,
-					clangFormatContent: '',
-				},
-			};
-			fs.writeFileSync (configPath, JSON.stringify (config, null, 2));
-		}
-
-		// Create subdirectories
-		const dirs = ['notes'];
-		for (const dir of dirs) {
-			const dirPath = path.join (this.configDir, dir);
-			if (!fs.existsSync (dirPath)) {
-				fs.mkdirSync (dirPath, { recursive: true });
+		try {
+			if (!fs.existsSync (this.configDir)) {
+				fs.mkdirSync (this.configDir, { recursive: true });
 			}
+
+			// Create config.json
+			const configPath = path.join (this.configDir, 'config.json');
+			if (!fs.existsSync (configPath)) {
+				const config: JungleKitConfig = {
+					project: 'pintos',
+					convention: DEFAULT_CONVENTION,
+					env: DEFAULT_ENV,
+					style: {
+						autoCreateClangFormat: true,
+						clangFormatContent: '',
+					},
+				};
+				fs.writeFileSync (configPath, JSON.stringify (config, null, 2));
+			}
+
+			// Create subdirectories
+			const dirs = ['notes'];
+			for (const dir of dirs) {
+				const dirPath = path.join (this.configDir, dir);
+				if (!fs.existsSync (dirPath)) {
+					fs.mkdirSync (dirPath, { recursive: true });
+				}
+			}
+
+			// Add notes to .gitignore (local-only)
+			await this.ensureGitignoreEntry ('notes/');
+
+			console.log ('[Annotation] initialized: .jungle-kit/ created');
+		} catch (err: any) {
+			vscode.window.showErrorMessage (`[Annotation] 프로젝트 초기화 실패: ${err.message || err}`);
 		}
-
-		// Add notes to .gitignore (local-only)
-		await this.ensureGitignoreEntry ('notes/');
-
-		console.log ('[Annotation] initialized: .jungle-kit/ created');
 	}
 
 loadEnvConfig (): EnvConfig {
@@ -153,14 +156,17 @@ loadEnvConfig (): EnvConfig {
 
 	private async ensureGitignoreEntry (entry: string): Promise<void> {
 		const root = this.getWorkspaceRoot ();
-		const gitignorePath = path.join (root, '.jungle-kit', '.gitignore');
-		let content = '';
-		if (fs.existsSync (gitignorePath)) {
-			content = fs.readFileSync (gitignorePath, 'utf-8');
-		}
-		if (!content.includes (entry)) {
-			content += `\n${entry}\n`;
-			fs.writeFileSync (gitignorePath, content);
+		if (!root) { return; }
+		try {
+			const gitignorePath = path.join (root, '.gitignore');
+			let content = '';
+			try { content = fs.readFileSync (gitignorePath, 'utf-8'); } catch { /* 파일 없으면 새로 생성 */ }
+			if (!content.includes (entry)) {
+				content += `\n${entry}\n`;
+				fs.writeFileSync (gitignorePath, content);
+			}
+		} catch (err) {
+			console.warn ('[Annotation] .gitignore 업데이트 실패:', err);
 		}
 	}
 }

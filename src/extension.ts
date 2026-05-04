@@ -82,18 +82,20 @@ export async function activate (context: vscode.ExtensionContext) {
 			const id = extractTagId (item);
 			if (id) { tagSystem.editAnnotation (id); }
 		}],
-		['jungleKit.goToTag', (tag: any) => {
+		['jungleKit.goToTag', async (tag: any) => {
 			if (!tag?.file) {return;}
 			const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 			if (!root) {return;}
-			const uri = vscode.Uri.file (`${root}/${tag.file}`);
-			vscode.workspace.openTextDocument (uri).then ((doc) => {
-				vscode.window.showTextDocument (doc).then ((editor) => {
-					const pos = new vscode.Position (tag.line, 0);
-					editor.selection = new vscode.Selection (pos, pos);
-					editor.revealRange (new vscode.Range (pos, pos), vscode.TextEditorRevealType.InCenter);
-				});
-			});
+			try {
+				const uri = vscode.Uri.file (`${root}/${tag.file}`);
+				const doc = await vscode.workspace.openTextDocument (uri);
+				const editor = await vscode.window.showTextDocument (doc);
+				const pos = new vscode.Position (tag.line, 0);
+				editor.selection = new vscode.Selection (pos, pos);
+				editor.revealRange (new vscode.Range (pos, pos), vscode.TextEditorRevealType.InCenter);
+			} catch {
+				vscode.window.showWarningMessage ('태그가 가리키는 파일을 열 수 없습니다.');
+			}
 		}],
 
 		// Shadow Diff & Sync
@@ -135,8 +137,10 @@ export async function activate (context: vscode.ExtensionContext) {
 		}
 	}
 
-	// Register warn guard after tag system is active
-	tagSystem.registerWarnGuard (context);
+
+
+	// Disposable 등록 — deactivate 시 리소스 정리
+	context.subscriptions.push ({ dispose: () => envValidator.dispose () });
 
 	console.log ('[Annotation] Extension activated');
 }

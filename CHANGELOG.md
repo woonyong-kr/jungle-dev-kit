@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.20.0] - 2026-05-05
+
+### Security
+- **styleEnforcer**: `clang-format` 호출을 `execFile`로 전환하여 파일명 기반 shell injection 차단
+- **shadowDiff**: `getLocalModifiedLines`에서 `execFile`로 전환하여 파일 경로 injection 차단
+- **tagSystem**: WebView에 주입되는 JSON에 `<`/`>` 이스케이프 추가 (XSS 방지)
+
+### Fixed
+- **tagSystem**: `deleteAnnotation` 후 `applyEdit`이 트리거하는 재스캔이 삭제된 어노테이션을 복원하는 race condition 수정
+- **tagSystem**: `selected.detail!` non-null assertion을 안전한 가드로 교체
+- **prPanel**: `openPanel` 전체를 try/catch로 래핑 — 패널이 중간에 닫혀도 unhandled rejection 방지
+- **prPanel**: `handleCreatePR` 중복 실행 방지 (`_isCreatingPR` guard)
+- **prPanel**: PR 생성 성공 시 URL 클릭 가능한 링크로 표시
+- **gitUtils**: `undoLastCommit`에 cwd 빈 문자열 guard 추가
+- **extension.ts**: `goToTag`에서 파일 열기 실패 시 unhandled promise rejection → try/catch 전환
+- **configManager**: `initProject` 전체를 try/catch로 래핑 — 읽기 전용 파일시스템에서 무음 실패 방지
+- **configManager**: `ensureGitignoreEntry` TOCTOU race 수정 및 에러 핸들링 추가
+- **configManager**: `.gitignore` 경로가 `.jungle-kit/` 안에 잘못 쓰이던 버그 수정 → 워크스페이스 루트로 변경
+- **styleEnforcer**: `.clang-format` 쓰기에 try/catch 추가 (읽기 전용 파일시스템 대응)
+- **smartCommit**: `max_completion_tokens` → `max_tokens`로 수정 (GPT-4o-mini 호환)
+
+### Changed
+- **shadowDiff**: `branchChanges` 원자적 교체 — 분석 중 부분 데이터 참조 race condition 제거
+- **shadowDiff**: `_disposed` 플래그 추가 — 익스텐션 비활성화 후 타이머 콜백에서 disposed 리소스 접근 방지
+- **shadowDiff**: `_outputChannel` deactivate 시 자동 정리
+- **environmentValidator**: `dispose()` 메서드 추가 + deactivate 시 `_outputChannel` 정리
+
+### Removed
+- **tagSystem**: 미사용 `_treeView` 필드 제거 (dead code)
+- **configManager**: 미사용 `pintos-activate` 환경 검사 키 제거 (dead config)
+
 ## [0.19.0] - 2025-05-05
 
 ### Fixed

@@ -20,6 +20,13 @@ export class EnvironmentValidator {
 		this.config = config;
 	}
 
+	dispose (): void {
+		if (this._outputChannel) {
+			this._outputChannel.dispose ();
+			this._outputChannel = null;
+		}
+	}
+
 	async validateOnStartup (): Promise<void> {
 		const envConfig = this.config.loadEnvConfig ();
 		if (envConfig.showOnStartup) {
@@ -60,7 +67,8 @@ export class EnvironmentValidator {
 	): Promise<CheckResult> {
 		try {
 			const { stdout } = await execAsync (cmd, {
-				cwd: this.config.getWorkspaceRoot (),
+				cwd: this.config.getWorkspaceRoot () || undefined,
+				maxBuffer: 5 * 1024 * 1024,
 			});
 			const version = stdout.split ('\n')[0];
 			return { name, passed: true, message: version };

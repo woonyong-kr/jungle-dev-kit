@@ -34,6 +34,7 @@ export class PRPanel {
 	private apiKeys: APIKeyManager;
 	private config: ConfigManager;
 	private tagSystem: TagSystem;
+	private _isCreatingPR = false;
 
 	constructor (git: GitUtils, apiKeys: APIKeyManager, config: ConfigManager, tagSystem: TagSystem) {
 		this.git = git;
@@ -50,6 +51,7 @@ export class PRPanel {
 			{ enableScripts: true }
 		);
 
+		try {
 		// Gather data
 		const currentBranch = await this.git.getCurrentBranch ();
 		if (!currentBranch) {
@@ -130,6 +132,10 @@ export class PRPanel {
 		// 내부 상태로 현재 diff/files 보관 (base 변경 시 갱신)
 		this._currentDiff = diff;
 		this._currentChangedFiles = changedFiles;
+		} catch (err: any) {
+			console.error ('[Annotation] PR panel open failed:', err);
+			try { panel.dispose (); } catch { /* already disposed */ }
+		}
 	}
 
 	private _currentDiff: string | undefined;
@@ -238,6 +244,12 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 		panel: vscode.WebviewPanel,
 		data: { title: string; body: string; base: string; reviewers: string }
 	): Promise<void> {
+		if (this._isCreatingPR) {
+			panel.webview.postMessage ({ command: 'status', text: 'PR 생성이 이미 진행 중입니다...' });
+			return;
+		}
+		this._isCreatingPR = true;
+		try {
 		const root = this.config.getWorkspaceRoot ();
 
 		if (!root) {
@@ -357,7 +369,23 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 			const stderr = err.stderr || err.message || '';
 			let userMsg = 'PR 생성 실패';
 			if (stderr.includes ('already exists')) {
-				userMsg = '이 브랜치에 이미 열린 PR이 있습니다.';
+				// 기존 PR URL을 조회해서 표시
+				try {
+					const { stdout: prListOut } = await execAsync (
+						'gh pr view --json url --jq .url',
+						{ cwd: root, timeout: 10000 }
+					);
+					const existingUrl = prListOut.trim ();
+					if (existingUrl) {
+						panel.webview.postMessage ({
+							command: 'success',
+							text: `이미 열린 PR이 있습니다: ${existingUrl}\n새 커밋을 push하면 PR이 자동 업데이트됩니다.`,
+							url: existingUrl,
+						});
+						return;
+					}
+				} catch { /* 조회 실패 시 기본 메시지 */ }
+				userMsg = '이 브랜치에 이미 열린 PR이 있습니다. 새 커밋을 push하면 자동 반영됩니다.';
 			} else if (stderr.includes ('not a git repository')) {
 				userMsg = '현재 디렉토리가 git 저장소가 아닙니다.';
 			} else if (stderr.includes ('could not find')) {
@@ -373,6 +401,9 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 			// Cleanup temp files (성공·실패 모두)
 			try {fs.unlinkSync (titleFile);} catch {}
 			try {fs.unlinkSync (bodyFile);} catch {}
+		}
+		} finally {
+			this._isCreatingPR = false;
 		}
 	}
 
@@ -936,7 +967,11 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 					break;
 				}
 				case 'success': {
-					area.innerHTML = '<div class="message success"><span class="msg-icon">&#10003;</span> ' + esc(msg.text) + '</div>';
+					let successHtml = esc(msg.text);
+					if (msg.url) {
+						successHtml += ' <a href="' + esc(msg.url) + '" target="_blank">PR 열기 &rarr;</a>';
+					}
+					area.innerHTML = '<div class="message success"><span class="msg-icon">&#10003;</span> ' + successHtml + '</div>';
 					const okBtn = document.querySelector('.btn-create');
 					if (okBtn) { okBtn.disabled = true; okBtn.textContent = 'PR 생성 완료'; }
 					break;

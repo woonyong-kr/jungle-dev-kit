@@ -83,15 +83,15 @@ export class GitUtils {
 	): Promise<
 		{ hash: string; author: string; message: string; date: string }[]
 	> {
-		const sep = '\x00';
+		const SEP = '__|__';
 		const output = await this.run (
-			`git log ${sanitizeRef (branch)} -${Math.max (1, Math.min (count, 100))} --format="%H${sep}%an${sep}%s${sep}%ar"`
+			`git log ${sanitizeRef (branch)} -${Math.max (1, Math.min (count, 100))} --format="%H${SEP}%an${SEP}%s${SEP}%ar"`
 		);
 		return output
 			.split ('\n')
 			.filter ((l) => l.length > 0)
 			.map ((line) => {
-				const parts = line.split (sep);
+				const parts = line.split (SEP);
 				return {
 					hash: parts[0] || '',
 					author: parts[1] || '',
@@ -116,6 +116,11 @@ export class GitUtils {
 	}
 
 	async undoLastCommit (): Promise<void> {
+		const cwd = this.getCwd ();
+		if (!cwd) {
+			vscode.window.showErrorMessage ('워크스페이스가 열려있지 않습니다.');
+			return;
+		}
 		const confirm = await vscode.window.showWarningMessage (
 			'마지막 커밋을 취소하고 변경사항을 staged로 되돌리겠습니까?',
 			'취소 (soft reset)',
@@ -124,7 +129,7 @@ export class GitUtils {
 		if (confirm === '취소 (soft reset)') {
 			try {
 				await execAsync ('git reset --soft HEAD~1', {
-					cwd: this.getCwd (),
+					cwd,
 					maxBuffer: MAX_BUFFER,
 				});
 				vscode.window.showInformationMessage (

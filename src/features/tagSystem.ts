@@ -136,7 +136,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private filterType: AnnotationType | null = null;
 	private filterText: string | null = null;
 	private _regionChildrenMap: Map<string, TagTreeItem[]> = new Map ();
-	private _treeView: vscode.TreeView<TagTreeItem> | null = null;
 	private _onDidChangeTreeData = new vscode.EventEmitter<TagTreeItem | undefined> ();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
@@ -145,8 +144,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		this.apiKeys = apiKeys || null;
 	}
 
-	setTreeView (treeView: vscode.TreeView<TagTreeItem>, context: vscode.ExtensionContext): void {
-		this._treeView = treeView;
+	setTreeView (_treeView: vscode.TreeView<TagTreeItem>, _context: vscode.ExtensionContext): void {
+		// 향후 확장용 — 현재는 extension.ts에서 treeView를 context.subscriptions에 직접 등록
 	}
 
 	async activate (context: vscode.ExtensionContext): Promise<void> {
@@ -167,7 +166,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		await this.setupAnnotationFilter (root);
 
 		// Store initial HEAD
-		this.getCurrentCommitHash ().then ((h) => { this._lastKnownHead = h; });
+		this.getCurrentCommitHash ().then ((h) => { this._lastKnownHead = h; }).catch (() => {});
 
 		// 현재 열린 파일 스캔 & 데코레이션
 		this.scanVisibleEditors ();
@@ -675,9 +674,18 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					// 해당 줄이 실제로 annotation 주석인지 확인
 					if (lineText.match (SINGLE_LINE_RE) || lineText.match (BLOCK_SINGLE_RE) || lineText.match (BLOCK_START_RE)) {
 						const edit = new vscode.WorkspaceEdit ();
-						const deletedLines = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount) - ann.line;
-						edit.delete (uri, new vscode.Range (ann.line, 0, ann.line + deletedLines, 0));
+						const endLine = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount);
+						const deletedLines = endLine - ann.line;
+						// EOF일 때 Range가 문서 끝을 초과하지 않도록 클램핑
+						const rangeEnd = endLine < doc.lineCount
+							? new vscode.Position (endLine, 0)
+							: doc.lineAt (doc.lineCount - 1).range.end;
+						edit.delete (uri, new vscode.Range (ann.line, 0, rangeEnd.line, rangeEnd.character));
 						await vscode.workspace.applyEdit (edit);
+
+						// applyEdit이 onDidChangeTextDocument를 트리거 → 새 스캔 타이머 예약됨
+						// 삭제된 어노테이션이 재추가되지 않도록 타이머 다시 취소
+						if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 
 						// 같은 파일의 나머지 어노테이션 줄 번호를 직접 조정 (재스캔 없이)
 						for (const other of this.annotations) {
@@ -969,28 +977,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	// Warn guard
 	// ──────────────────────────────────────────
 
-	registerWarnGuard (context: vscode.ExtensionContext): void {
-		context.subscriptions.push (
-			vscode.workspace.onDidChangeTextDocument ((event) => {
-				const doc = event.document;
-				const relativePath = vscode.workspace.asRelativePath (doc.uri);
-				const warns = this.annotations.filter (
-					(a) => a.file === relativePath && a.type === 'warn'
-				);
-
-				for (const change of event.contentChanges) {
-					const changedLine = change.range.start.line;
-					for (const w of warns) {
-						if (Math.abs (w.line - changedLine) <= 2) {
-							console.log (
-								`[Annotation] ⚡ @warn 근처 편집: ${w.displayLabel || w.content}`
-							);
-						}
-					}
-				}
-			})
-		);
-	}
 
 	// ──────────────────────────────────────────
 	// Review tags accessor (PR 패널 호환)
@@ -1686,9 +1672,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 		);
 
-		if (!selected) { return; }
+		if (!selected || !selected.detail) { return; }
 
-		const commitHash = selected.detail!;
+		const commitHash = selected.detail;
 
 		await vscode.window.withProgress (
 			{
@@ -2234,7 +2220,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			annotation: '어노테이션',
 		};
 
-		const shortcutsJson = JSON.stringify (shortcuts);
+		// HTML 내 <script> 블록에 주입 — </script> 탈출 방지를 위해 <, >, / 이스케이프
+		const shortcutsJson = JSON.stringify (shortcuts)
+			.replace (/</g, '\\u003c')
+			.replace (/>/g, '\\u003e');
 
 		return /* html */ `<!DOCTYPE html>
 <html lang="ko">

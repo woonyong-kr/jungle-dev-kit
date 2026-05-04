@@ -69,7 +69,7 @@ export class SmartCommit {
 				{ role: 'user', content: trimmedDiff },
 			],
 			temperature: 0.3,
-			max_completion_tokens: 500,
+			max_tokens: 500,
 		});
 
 		const response = completion.choices[0]?.message?.content || '';

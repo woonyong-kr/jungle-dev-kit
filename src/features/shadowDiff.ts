@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { GitUtils, sanitizeRef } from '../utils/gitUtils';
 import { ConfigManager, DIFF_FILE_EXTENSIONS } from '../utils/configManager';
 
 const execAsync = promisify (exec);
+const execFileAsync = promisify (execFile);
 
 const MAX_BUFFER = 5 * 1024 * 1024; // 5 MB
 
@@ -45,6 +46,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 	private _onDidChangeCodeLenses = new vscode.EventEmitter<void> ();
 	readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
 	private _outputChannel: vscode.OutputChannel | null = null;
+	private _disposed = false;
 
 	constructor (config: ConfigManager, git: GitUtils) {
 		this.config = config;
@@ -72,7 +74,9 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 
 		context.subscriptions.push ({
 			dispose: () => {
+				this._disposed = true;
 				if (this.fetchInterval) {clearInterval (this.fetchInterval);}
+				if (this._outputChannel) { this._outputChannel.dispose (); }
 			},
 		});
 
@@ -126,9 +130,12 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 	// --- Shadow Diff Core ---
 
 	private async fetchAndAnalyze (): Promise<void> {
+		if (this._disposed) { return; }
 		try {
 			await this.git.fetch ();
+			if (this._disposed) { return; }
 			await this.analyzeRemoteBranches ();
+			if (this._disposed) { return; }
 			this.updateAllDecorations ();
 			this._onDidChangeCodeLenses.fire ();
 		} catch {
@@ -149,7 +156,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 			(b) => b.startsWith ('origin/') && !b.includes ('HEAD') && b !== `origin/${currentBranch}`
 		);
 
-		this.branchChanges = [];
+		const newChanges: BranchChange[] = [];
 
 		for (const remoteBranch of remoteBranches) {
 			try {
@@ -178,7 +185,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 				const fileChanges = this.parseDiffToHunks (diffOutput);
 
 				for (const [file, hunks] of fileChanges.entries ()) {
-					this.branchChanges.push ({
+					newChanges.push ({
 						branch: remoteBranch.replace ('origin/', ''),
 						author,
 						file,
@@ -190,6 +197,9 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 				// Skip branches that fail
 			}
 		}
+
+		// 원자적 교체 — 분석 도중 읽기 측에서 부분 데이터 참조 방지
+		this.branchChanges = newChanges;
 	}
 
 	private parseDiffToHunks (diff: string): Map<string, BranchChange['hunks']> {
@@ -311,14 +321,14 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 		if (!root) {return lines;}
 
 		try {
-			// Combine staged + unstaged diffs for the file
-			const { stdout: stagedDiff } = await execAsync (
-				`git diff --cached -U0 -- "${relativePath}" 2>/dev/null`,
+			// execFile로 호출하여 shell injection 방지 (파일 경로를 인자로 전달)
+			const { stdout: stagedDiff } = await execFileAsync (
+				'git', ['diff', '--cached', '-U0', '--', relativePath],
 				{ cwd: root }
 			).catch (() => ({ stdout: '' }));
 
-			const { stdout: unstagedDiff } = await execAsync (
-				`git diff -U0 -- "${relativePath}" 2>/dev/null`,
+			const { stdout: unstagedDiff } = await execFileAsync (
+				'git', ['diff', '-U0', '--', relativePath],
 				{ cwd: root }
 			).catch (() => ({ stdout: '' }));
 
