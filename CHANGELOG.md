@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.17.1] - 2025-05-05
+
+### Fixed
+- 사이드바 트리 펼치기/접기 오류 수정 — 모든 TreeItem에 명시적 `id` 속성 추가하여 VS Code가 리프레시 후 expand/collapse 상태를 안정적으로 보존하도록 개선
+- 커스텀 `_userExpandState`/`resolveExpandState` 상태 추적 제거 — VS Code 내부 상태 관리에 위임하여 `fire(undefined)`와 `onDidExpandElement` 간 레이스 컨디션 해소
+- **치명적**: `reviewInProgress` 플래그가 조기 리턴 시 리셋되지 않아 이후 모든 자동 리뷰가 영구 차단되던 버그 수정 — 전체 로직을 `try/finally`로 래핑
+- 다중 선택 드래그 정렬에서 `Infinity - Infinity = NaN`으로 비결정적 순서가 발생하던 버그 수정 — fallback 비교 함수 추가
+- 리뷰 자동 생성 루프에서 `Date.now()` 기반 ID 중복 가능성 수정 — `generateId()` 사용으로 교체
+- `_scanTimer`와 `_onDidChangeTreeData` EventEmitter가 익스텐션 비활성화 시 정리되지 않던 리소스 누수 수정
+- `openAnnotationInEditor`에서 `workspaceFolders[0]` 대신 `config.getWorkspaceRoot()` 사용으로 일관성 확보
+- PR 생성 실패 시 임시 파일(`pr-title-temp.txt`, `pr-body-temp.md`)이 삭제되지 않던 버그 수정 — `finally` 블록으로 이동
+
+### Changed
+- `@review` 색상을 골드(#FFD54F)에서 주황(#FB8C00)으로 변경 — 가독성 개선
+
 ## [0.17.0] - 2025-05-05
 
 ### Fixed

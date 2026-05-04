@@ -28,7 +28,7 @@ const AI_MAX_CONTEXT_LINES = 10;             // AI 설명 생성 시 전후 컨�
  * 태그 종류 (표시 순서):
  * - @bookmark : 북마크 (파랑 #4FC3F7)
  * - @todo     : 할 일 (녹색 #66BB6A)
- * - @review   : 리뷰 (골드 #FFD54F) — 커밋 단위 그룹핑
+ * - @review   : 리뷰 (주황 #FB8C00) — 커밋 단위 그룹핑
  * - @warn     : 런타임 에러 기록 (빨강 #EF5350)
  *
  * 동작 흐름:
@@ -73,7 +73,7 @@ interface ShortcutEntry {
 const TAG_COLORS: Record<AnnotationType, string> = {
 	todo: '#66BB6A',
 	bookmark: '#4FC3F7',
-	review: '#FFD54F',
+	review: '#FB8C00',
 	warn: '#EF5350',
 	breakpoint: '#FF7043',
 	region: '#B39DDB',
@@ -83,7 +83,7 @@ const TAG_COLORS: Record<AnnotationType, string> = {
 const TAG_BG_COLORS: Record<AnnotationType, string> = {
 	todo: 'rgba(102, 187, 106, 0.12)',
 	bookmark: 'rgba(79, 195, 247, 0.10)',
-	review: 'rgba(255, 213, 79, 0.12)',
+	review: 'rgba(251, 140, 0, 0.14)',
 	warn: 'rgba(239, 83, 80, 0.12)',
 	breakpoint: 'rgba(255, 112, 67, 0.14)',
 	region: 'rgba(179, 157, 219, 0.10)',
@@ -93,7 +93,7 @@ const TAG_BG_COLORS: Record<AnnotationType, string> = {
 const TAG_TEXT_COLORS: Record<AnnotationType, string> = {
 	todo: '#66BB6A',
 	bookmark: '#4FC3F7',
-	review: '#FFD54F',
+	review: '#FB8C00',
 	warn: '#EF5350',
 	breakpoint: '#FF7043',
 	region: '#B39DDB',
@@ -136,17 +136,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private filterType: AnnotationType | null = null;
 	private filterText: string | null = null;
 	private _regionChildrenMap: Map<string, TagTreeItem[]> = new Map ();
-	/** 사용자가 명시적으로 펼치거나 접은 노드 상태 (contextValue → true=expanded, false=collapsed) */
-	private _userExpandState = new Map<string, boolean> ();
-
-	/** 사용자 조작이 있으면 그 상태, 없으면 기본값 반환 */
-	private resolveExpandState (contextValue: string, defaultExpanded: boolean): vscode.TreeItemCollapsibleState {
-		const userState = this._userExpandState.get (contextValue);
-		if (userState !== undefined) {
-			return userState ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed;
-		}
-		return defaultExpanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed;
-	}
 	private _treeView: vscode.TreeView<TagTreeItem> | null = null;
 	private _onDidChangeTreeData = new vscode.EventEmitter<TagTreeItem | undefined> ();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -158,16 +147,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 	setTreeView (treeView: vscode.TreeView<TagTreeItem>, context: vscode.ExtensionContext): void {
 		this._treeView = treeView;
-		context.subscriptions.push (
-			treeView.onDidExpandElement ((e) => {
-				const cv = e.element.contextValue;
-				if (cv) { this._userExpandState.set (cv, true); }
-			}),
-			treeView.onDidCollapseElement ((e) => {
-				const cv = e.element.contextValue;
-				if (cv) { this._userExpandState.set (cv, false); }
-			})
-		);
 	}
 
 	async activate (context: vscode.ExtensionContext): Promise<void> {
@@ -202,6 +181,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		// @region/@endregion 접기 지원
 		this.registerRegionFolding (context);
+
+		// 비활성화 시 타이머·이벤트 정리
+		context.subscriptions.push ({ dispose: () => {
+			if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
+			this._onDidChangeTreeData.dispose ();
+		}});
 
 		// 저장된 단축키 설정 자동 적용 (사용자가 한 번이라도 설정한 경우에만)
 		const kbPath = this.getKeybindingsFilePath ();
@@ -932,7 +917,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	}
 
 	private async openAnnotationInEditor (ann: Annotation): Promise<void> {
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const root = this.config.getWorkspaceRoot ();
 		if (!root) { return; }
 		const uri = vscode.Uri.file (path.join (root, ann.file));
 		try {
@@ -1074,7 +1059,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			// 다중 선택: 기존 insert 방식 (정렬 순서 유지)
 			const typeAnns = this.annotations
 				.filter ((a) => a.type === type)
-				.sort ((a, b) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
+				.sort ((a, b) => {
+					const oa = a.sortOrder ?? Infinity;
+					const ob = b.sortOrder ?? Infinity;
+					if (oa !== Infinity || ob !== Infinity) { return oa - ob; }
+					return a.file.localeCompare (b.file) || a.line - b.line;
+				});
 			const draggedSorted = typeAnns.filter ((a) => draggedIds.includes (a.id));
 			const remaining = typeAnns.filter ((a) => !draggedIds.includes (a.id));
 			let targetIdx = remaining.findIndex ((a) => a.id === targetAnn.id);
@@ -1177,7 +1167,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			if (count === 0) { continue; }
 
 			const contextValue = `tagGroup-${type}`;
-			const item = new TagTreeItem (`@${type}`, this.resolveExpandState (contextValue, true));
+			const item = new TagTreeItem (`@${type}`, vscode.TreeItemCollapsibleState.Expanded);
+			item.id = contextValue;
 			item.description = `(${count})`;
 			item.iconPath = vscode.Uri.joinPath (
 				this.context.extensionUri, 'resources', 'icons', `${type}.svg`
@@ -1200,7 +1191,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const items: TagTreeItem[] = [];
 		for (const [file, anns] of fileGroups) {
 			const contextValue = `tagFile-${file}`;
-			const item = new TagTreeItem (path.basename (file), this.resolveExpandState (contextValue, true));
+			const item = new TagTreeItem (path.basename (file), vscode.TreeItemCollapsibleState.Expanded);
+			item.id = contextValue;
 			const dir = path.dirname (file) !== '.' ? path.dirname (file) + ' ' : '';
 			item.description = `${dir}(${anns.length})`;
 			item.resourceUri = vscode.Uri.parse (`jungle-tag:///${file}`);
@@ -1234,7 +1226,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				: `${hash.substring (0, 7)} — ${items[0]?.author || 'unknown'} (${items.length})`;
 
 			const contextValue = `tagCommit-${hash}`;
-			const item = new TagTreeItem (label, this.resolveExpandState (contextValue, false));
+			const item = new TagTreeItem (label, vscode.TreeItemCollapsibleState.Collapsed);
+			item.id = contextValue;
 			item.iconPath = new vscode.ThemeIcon ('git-commit');
 			item.contextValue = contextValue;
 			return item;
@@ -1314,9 +1307,11 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		if (hasChildren) {
 			item.contextValue = `tagRegion-${ann.id}`;
+			item.id = `tagRegion-${ann.id}`;
 			this._regionChildrenMap.set (ann.id, children);
 		} else {
 			item.contextValue = `tag-region-${ann.id}`;
+			item.id = `tag-region-${ann.id}`;
 		}
 
 		return item;
@@ -1359,6 +1354,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		};
 
 		item.contextValue = `tag-${ann.type}-${ann.id}`;
+		item.id = `tag-${ann.type}-${ann.id}`;
 		return item;
 	}
 
@@ -1540,13 +1536,13 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			headCheckTimer = null;
 			if (reviewInProgress) { return; }
 			reviewInProgress = true;
-			const currentHead = await this.getCurrentCommitHash ();
-			if (!currentHead || currentHead === this._lastKnownHead) { return; }
-
-			const oldHead = this._lastKnownHead;
-			this._lastKnownHead = currentHead;
-
 			try {
+				const currentHead = await this.getCurrentCommitHash ();
+				if (!currentHead || currentHead === this._lastKnownHead) { return; }
+
+				const oldHead = this._lastKnownHead;
+				this._lastKnownHead = currentHead;
+
 				if (oldHead) {
 					await this.generateReviewsForDiff (oldHead, currentHead);
 				}
@@ -1614,7 +1610,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 				// 가상 @review 추가 (파일에 쓰지 않음)
 				this.annotations.push ({
-					id: `vreview-${add.file}:${add.line}:${Date.now ()}`,
+					id: `vreview-${add.file}:${add.line}:${this.generateId ()}`,
 					type: 'review',
 					file: add.file,
 					line: add.line,
@@ -1749,7 +1745,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 						}
 
 						this.annotations.push ({
-							id: `vreview-${add.file}:${add.line}:${Date.now ()}`,
+							id: `vreview-${add.file}:${add.line}:${this.generateId ()}`,
 							type: 'review',
 							file: add.file,
 							line: add.line,
@@ -1801,7 +1797,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 								try { description = await this.generateAIDescription (add, root); } catch { /* AI 실패 */ }
 								if (!description) { description = this.generateDoxygenDescription (add); }
 								this.annotations.push ({
-									id: `vreview-${add.file}:${add.line}:${Date.now ()}`,
+									id: `vreview-${add.file}:${add.line}:${this.generateId ()}`,
 									type: 'review', file: add.file, line: add.line,
 									content: `[${rootAuthor}] ${description}`,
 									displayLabel: null, createdAt: new Date ().toISOString (),

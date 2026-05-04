@@ -240,12 +240,11 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 		}
 
 		// Create PR
+		const tempDir = path.join (root, '.jungle-kit');
+		const titleFile = path.join (tempDir, 'pr-title-temp.txt');
+		const bodyFile = path.join (tempDir, 'pr-body-temp.md');
 		try {
-			const tempDir = path.join (root, '.jungle-kit');
-
 			// Write title and body to temp files to avoid all shell injection
-			const titleFile = path.join (tempDir, 'pr-title-temp.txt');
-			const bodyFile = path.join (tempDir, 'pr-body-temp.md');
 			fs.writeFileSync (titleFile, data.title);
 			fs.writeFileSync (bodyFile, data.body);
 
@@ -263,10 +262,6 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 			const { stdout } = await execAsync (cmd, { cwd: root });
 			const prUrl = stdout.trim ();
 
-			// Cleanup temp files
-			try {fs.unlinkSync (bodyFile);} catch {}
-			try {fs.unlinkSync (titleFile);} catch {}
-
 			panel.webview.postMessage ({
 				command: 'success',
 				text: `PR이 생성되었습니다: ${prUrl}`,
@@ -279,6 +274,10 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 				command: 'error',
 				text: `PR 생성 실패: ${err.message}`,
 			});
+		} finally {
+			// Cleanup temp files (성공·실패 모두)
+			try {fs.unlinkSync (titleFile);} catch {}
+			try {fs.unlinkSync (bodyFile);} catch {}
 		}
 	}
 
