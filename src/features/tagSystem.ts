@@ -725,11 +725,27 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	}
 
 	async clearAllAnnotations (): Promise<void> {
-		const count = this.annotations.length;
+		// 현재 필터가 활성화되어 있으면 필터된 항목만 삭제
+		let targets = this.annotations;
+		let label = '전체';
+		if (this.filterType) {
+			targets = this.annotations.filter ((a) => a.type === this.filterType);
+			label = `@${this.filterType}`;
+		}
+		if (this.filterText) {
+			const q = this.filterText.toLowerCase ();
+			targets = targets.filter ((a) =>
+				(a.displayLabel || a.content).toLowerCase ().includes (q) ||
+				a.file.toLowerCase ().includes (q)
+			);
+			label = `"${this.filterText}" 검색 결과`;
+		}
+
+		const count = targets.length;
 		if (count === 0) { return; }
 
 		const confirm = await vscode.window.showWarningMessage (
-			`어노테이션 ${count}개를 모두 삭제하시겠습니까? (파일 내 주석도 함께 삭제됩니다)`,
+			`${label} 어노테이션 ${count}개를 삭제하시겠습니까? (파일 내 주석도 함께 삭제됩니다)`,
 			'삭제', '취소'
 		);
 		if (confirm !== '삭제') { return; }
@@ -738,12 +754,13 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 
 		// 파일에서 주석 줄 삭제
-		await this.removeAnnotationLinesFromFiles (this.annotations);
+		await this.removeAnnotationLinesFromFiles (targets);
 
 		// 편집으로 인해 재스케줄된 스캔 타이머도 취소
 		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 
-		this.annotations = [];
+		const targetIds = new Set (targets.map ((a) => a.id));
+		this.annotations = this.annotations.filter ((a) => !targetIds.has (a.id));
 		this.saveAnnotations ();
 		this.updateAllDecorations ();
 		this._onDidChangeTreeData.fire (undefined);
@@ -2155,7 +2172,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		try {
 			if (fs.existsSync (filePath)) {
 				const raw = JSON.parse (fs.readFileSync (filePath, 'utf-8'));
-				if (Array.isArray (raw.shortcuts)) {
+				if (Array.isArray (raw.shortcuts) && raw.shortcuts.length > 0) {
 					return raw.shortcuts;
 				}
 			}
@@ -2652,8 +2669,14 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
     }
   });
 
-  try { render(); } catch(e) {
-    document.getElementById('content').innerHTML = '<p style="color:var(--vscode-errorForeground);padding:20px;">렌더링 오류: ' + esc(e.message) + '</p>';
+  try {
+    if (!shortcuts || shortcuts.length === 0) {
+      document.getElementById('content').innerHTML = '<p style="padding:20px;opacity:0.7;">등록된 단축키가 없습니다. "초기화" 버튼을 눌러 기본값을 복원하세요.</p>';
+    } else {
+      render();
+    }
+  } catch(e) {
+    document.getElementById('content').innerHTML = '<p style="color:var(--vscode-errorForeground);padding:20px;">렌더링 오류: ' + (e && e.message ? esc(e.message) : 'unknown') + '</p>';
   }
 </script>
 </body>

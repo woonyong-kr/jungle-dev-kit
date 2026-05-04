@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.0] - 2026-05-05
+
+### Fixed
+- **prPanel**: 패널 토글 동작 구현 — 열려있으면 닫고, 닫혀있으면 여는 싱글톤 관리 (`_panel` 필드 + `onDidDispose` 정리)
+- **prPanel**: 패널 열 때 `gh pr view`로 기존 PR 자동 감지 — 이미 열린 PR이 있으면 링크와 안내 표시
+- **tagSystem**: 사이드바 "모든 태그 삭제" 버튼이 현재 필터(`filterType`/`filterText`)를 무시하고 전체 삭제하던 버그 수정 — 필터링된 항목만 삭제
+- **tagSystem**: 단축키 설정 패널이 빈 화면으로 표시되던 버그 수정 — `loadShortcutSettings`에서 빈 배열 `[]` 반환 시 기본값 폴백 + WebView에서 빈 상태 안내 메시지 표시
+
 ## [0.20.1] - 2026-05-05
 
 ### Fixed

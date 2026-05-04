@@ -35,6 +35,7 @@ export class PRPanel {
 	private config: ConfigManager;
 	private tagSystem: TagSystem;
 	private _isCreatingPR = false;
+	private _panel: vscode.WebviewPanel | null = null;
 
 	constructor (git: GitUtils, apiKeys: APIKeyManager, config: ConfigManager, tagSystem: TagSystem) {
 		this.git = git;
@@ -44,12 +45,25 @@ export class PRPanel {
 	}
 
 	async openPanel (): Promise<void> {
+		// 토글: 이미 열려있으면 닫기
+		if (this._panel) {
+			this._panel.dispose ();
+			return;
+		}
+
 		const panel = vscode.window.createWebviewPanel (
 			'jungleKit.prPanel',
 			'PR 만들기',
 			vscode.ViewColumn.One,
 			{ enableScripts: true }
 		);
+
+		this._panel = panel;
+
+		// 패널 닫힐 때 참조 정리
+		panel.onDidDispose (() => {
+			this._panel = null;
+		});
 
 		try {
 		// Gather data
@@ -132,9 +146,38 @@ export class PRPanel {
 		// 내부 상태로 현재 diff/files 보관 (base 변경 시 갱신)
 		this._currentDiff = diff;
 		this._currentChangedFiles = changedFiles;
+
+		// 기존 PR 자동 감지 — 패널 열자마자 이미 PR이 있으면 알림
+		this.checkExistingPR (panel);
 		} catch (err: any) {
 			console.error ('[Annotation] PR panel open failed:', err);
 			try { panel.dispose (); } catch { /* already disposed */ }
+		}
+	}
+
+	/** 현재 브랜치에 이미 열린 PR이 있는지 확인하여 WebView에 알림 */
+	private async checkExistingPR (panel: vscode.WebviewPanel): Promise<void> {
+		const root = this.config.getWorkspaceRoot ();
+		if (!root) { return; }
+		try {
+			await execAsync ('gh --version', { cwd: root });
+			await execAsync ('gh auth status', { cwd: root });
+			const { stdout } = await execAsync (
+				'gh pr view --json url,title,state --jq \'\"\\(.state)|\\(.url)|\\(.title)\"\'',
+				{ cwd: root, timeout: 10000 }
+			);
+			const parts = stdout.trim ().split ('|');
+			if (parts.length >= 2 && parts[0] === 'OPEN') {
+				const prUrl = parts[1];
+				const prTitle = parts.slice (2).join ('|');
+				panel.webview.postMessage ({
+					command: 'existingPR',
+					url: prUrl,
+					title: prTitle,
+				});
+			}
+		} catch {
+			// gh 미설치·미인증·PR 없음 — 모두 무시 (정상 플로우)
 		}
 	}
 
@@ -979,6 +1022,17 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 				case 'status':
 					area.innerHTML = '<div class="message" style="color:#90CAF9;">&#9203; ' + esc(msg.text) + '</div>';
 					break;
+				case 'existingPR': {
+					const prHtml = '<a href="' + esc(msg.url) + '" target="_blank">' + esc(msg.title || msg.url) + '</a>';
+					area.innerHTML = '<div class="message success" style="margin:12px 24px;">'
+						+ '<span class="msg-icon">&#128279;</span> '
+						+ '이 브랜치에 이미 열린 PR이 있습니다: ' + prHtml
+						+ '<br><small style="opacity:0.7;">새 커밋을 push하면 PR이 자동 업데이트됩니다. 새 PR을 만들려면 기존 PR을 먼저 닫으세요.</small>'
+						+ '</div>';
+					const existBtn = document.querySelector('.btn-create');
+					if (existBtn) { existBtn.textContent = 'PR 업데이트 (push)'; }
+					break;
+				}
 				case 'updateFiles':
 					// base 브랜치 변경 시 파일 목록과 통계를 갱신
 					updateFileList(msg.files);
