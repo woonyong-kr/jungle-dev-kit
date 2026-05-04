@@ -235,28 +235,25 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 			return;
 		}
 
-		// Check if gh is installed — 없으면 자동 설치 시도
+		// Check if gh is installed — 없으면 자동 설치
 		try {
 			await execAsync ('gh --version', { cwd: root });
 		} catch {
-			const install = await vscode.window.showWarningMessage (
-				'GitHub CLI(gh)가 설치되어 있지 않습니다. 자동 설치를 시도할까요?',
-				'설치', '취소'
-			);
-			if (install !== '설치') { return; }
+			panel.webview.postMessage ({ command: 'status', text: 'GitHub CLI(gh) 설치 중...' });
 			try {
-				const terminal = vscode.window.createTerminal ('gh 설치');
-				terminal.show ();
-				terminal.sendText (
-					'sudo apt-get update && sudo apt-get install -y gh && echo "\\n✅ gh 설치 완료 — PR 만들기를 다시 실행하세요."'
+				await execAsync (
+					'sudo apt-get update -qq && sudo apt-get install -y -qq gh',
+					{ cwd: root, maxBuffer: 10 * 1024 * 1024, timeout: 60000 }
 				);
+				await execAsync ('gh --version', { cwd: root });
+				vscode.window.showInformationMessage ('[Annotation] GitHub CLI(gh) 자동 설치 완료');
 			} catch {
 				panel.webview.postMessage ({
 					command: 'error',
 					text: 'gh 자동 설치에 실패했습니다. 터미널에서 수동 설치: sudo apt-get update && sudo apt-get install -y gh',
 				});
+				return;
 			}
-			return;
 		}
 
 		// Check if gh is authenticated
