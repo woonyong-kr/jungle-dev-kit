@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.20.1] - 2026-05-05
+
+### Fixed
+- **tagSystem**: `removeAnnotationLinesFromFiles`에서 파일 마지막 줄 어노테이션 삭제 시 EOF 범위 클램핑 누락 수정
+
 ## [0.20.0] - 2026-05-05
 
 ### Security

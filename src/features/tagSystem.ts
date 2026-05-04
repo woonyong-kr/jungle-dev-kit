@@ -788,7 +788,11 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					const lineText = doc.lineAt (ann.line).text;
 					if (lineText.match (SINGLE_LINE_RE) || lineText.match (BLOCK_SINGLE_RE) || lineText.match (BLOCK_START_RE)) {
 						const endLine = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount);
-						edit.delete (uri, new vscode.Range (ann.line, 0, endLine, 0));
+						// EOF 클램핑 — 파일 마지막 줄일 때 범위가 문서 끝을 초과하지 않도록
+						const rangeEnd = endLine < doc.lineCount
+							? new vscode.Position (endLine, 0)
+							: doc.lineAt (doc.lineCount - 1).range.end;
+						edit.delete (uri, new vscode.Range (ann.line, 0, rangeEnd.line, rangeEnd.character));
 						for (let l = ann.line; l < endLine; l++) { deleted.add (l); }
 					}
 				}
