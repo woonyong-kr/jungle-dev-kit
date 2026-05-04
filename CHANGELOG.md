@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.18.2] - 2025-05-05
+
+### Fixed
+- `undoLastCommit`에서 제거된 `this.cwd` 참조 → `this.getCwd()` 호출로 수정 (컴파일 에러 방지)
+- `parseNumstat`에서 바이너리 파일(`-\t-\t...`) 파싱 시 NaN/undefined 발생 → 필터링 추가
+- `parseNumstat` 리네임 파일 경로 탭 포함 시 잘림 → `slice(2).join('\t')` 로 수정
+- `getAuthorName`/`getCurrentCommitHash`에서 워크스페이스 미오픈 시 빈 문자열 cwd 전달 → 조기 반환 추가
+- `styleEnforcer.checkFile`에서 워크스페이스 루트 미존재 시 빈 cwd로 clang-format 실행 → 조기 반환 추가
+- `applyKeybindings`에서 HOME 환경변수 없을 때 루트(`/`) 경로에 keybindings.json 생성 시도 → 조기 반환 추가
+
+## [0.18.1] - 2025-05-05
+
+### Fixed
+- PR 생성 시 `.jungle-kit` 디렉토리 미존재로 임시 파일 작성 실패(`ENOENT`) — 자동 생성 추가
+- PR 패널 열 때 base 브랜치 후보가 0개이면 빈 `<select>` → 에러 메시지 후 패널 닫기
+- PR base 브랜치 목록에 리모트 브랜치도 포함 — 로컬에 `main`이 없어도 `origin/main`을 base로 사용 가능
+- detached HEAD 상태에서 PR 패널 열기 시도 시 조기 차단 + 에러 메시지
+
+## [0.18.0] - 2025-05-05
+
+### Fixed
+- PR 생성 시 `gh auth status` 미체크로 미인증 상태에서 의미불명 에러 발생 — 인증·리모트 사전 검증 추가
+- `git push` 실패가 `catch {}` 로 무음 처리되어 푸시 안 된 채 PR 생성 시도 — 에러 전파 + "up-to-date" 판별 추가
+- PR 생성 에러 메시지를 raw stderr 대신 상황별 한국어 안내로 개선 (이미 PR 존재, base 미발견 등)
+- `.clang-format` 파일이 사용자 수정 시 익스텐션 기준 컨벤션과 달라지던 문제 — 매 활성화 시 강제 덮어쓰기로 변경
+
+### Changed
+- `.clang-format` 동기화 정책: "존재하면 건너뜀" → "매번 강제 덮어쓰기" (컨벤션 통일)
+
 ## [0.17.2] - 2025-05-05
 
 ### Fixed

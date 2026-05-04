@@ -52,9 +52,29 @@ export class PRPanel {
 
 		// Gather data
 		const currentBranch = await this.git.getCurrentBranch ();
-		const allBranches = await this.git.getLocalBranches ();
-		// 현재 브랜치를 제외한 모든 로컬 브랜치를 PR 대상으로 사용
-		const baseBranches = allBranches.filter ((b) => b !== currentBranch);
+		if (!currentBranch) {
+			vscode.window.showErrorMessage ('detached HEAD 상태에서는 PR을 생성할 수 없습니다.');
+			panel.dispose ();
+			return;
+		}
+
+		// 로컬 + 리모트 브랜치에서 현재 브랜치를 제외
+		const localBranches = await this.git.getLocalBranches ();
+		const allBranches = await this.git.getAllBranches ();
+		// 리모트 브랜치에서 "origin/" 접두어를 제거하고, HEAD 포인터 제외
+		const remoteBranches = allBranches
+			.filter ((b) => b.startsWith ('origin/') && !b.includes ('HEAD'))
+			.map ((b) => b.replace (/^origin\//, ''));
+		// 로컬 + 리모트 합치고 중복 제거, 현재 브랜치 제외
+		const baseBranches = [...new Set ([...localBranches, ...remoteBranches])]
+			.filter ((b) => b !== currentBranch);
+
+		if (baseBranches.length === 0) {
+			vscode.window.showErrorMessage ('PR 대상이 될 base 브랜치가 없습니다. 브랜치를 생성하거나 리모트를 fetch 하세요.');
+			panel.dispose ();
+			return;
+		}
+
 		const defaultBase = this.guessDefaultBase (baseBranches);
 
 		const diff = await this.git.getStagedDiff () || await this.git.getDiffAgainst (defaultBase);
@@ -226,21 +246,58 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 			return;
 		}
 
-		// Push current branch first
+		// Check if gh is authenticated
 		try {
-			const branch = await this.git.getCurrentBranch ();
-			if (!branch) {
-				vscode.window.showErrorMessage ('detached HEAD 상태에서는 PR을 생성할 수 없습니다.');
-				return;
-			}
+			await execAsync ('gh auth status', { cwd: root });
+		} catch (authErr: any) {
+			panel.webview.postMessage ({
+				command: 'error',
+				text: 'GitHub CLI 인증이 필요합니다. 터미널에서 `gh auth login` 을 실행하세요.',
+			});
+			return;
+		}
+
+		// Check remote exists
+		try {
+			await execAsync ('git remote get-url origin', { cwd: root });
+		} catch {
+			panel.webview.postMessage ({
+				command: 'error',
+				text: 'git remote "origin"이 설정되어 있지 않습니다. `git remote add origin <URL>` 로 추가하세요.',
+			});
+			return;
+		}
+
+		// Push current branch first
+		const branch = await this.git.getCurrentBranch ();
+		if (!branch) {
+			panel.webview.postMessage ({
+				command: 'error',
+				text: 'detached HEAD 상태에서는 PR을 생성할 수 없습니다.',
+			});
+			return;
+		}
+
+		try {
 			const safeBranch = branch.replace (/[^a-zA-Z0-9_\-\/.]/g, '');
 			await execAsync (`git push -u origin ${safeBranch}`, { cwd: root });
-		} catch {
-			// May already be pushed
+		} catch (pushErr: any) {
+			const msg = pushErr.stderr || pushErr.message || '';
+			// "Everything up-to-date" 는 정상 — 이미 푸시된 상태
+			if (!msg.includes ('up-to-date') && !msg.includes ('up to date')) {
+				panel.webview.postMessage ({
+					command: 'error',
+					text: `브랜치 푸시 실패: ${msg.trim ().split ('\n')[0]}`,
+				});
+				return;
+			}
 		}
 
 		// Create PR
 		const tempDir = path.join (root, '.jungle-kit');
+		if (!fs.existsSync (tempDir)) {
+			fs.mkdirSync (tempDir, { recursive: true });
+		}
 		const titleFile = path.join (tempDir, 'pr-title-temp.txt');
 		const bodyFile = path.join (tempDir, 'pr-body-temp.md');
 		try {
@@ -270,9 +327,20 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 
 			vscode.window.showInformationMessage (`PR 생성 완료: ${prUrl}`);
 		} catch (err: any) {
+			const stderr = err.stderr || err.message || '';
+			let userMsg = 'PR 생성 실패';
+			if (stderr.includes ('already exists')) {
+				userMsg = '이 브랜치에 이미 열린 PR이 있습니다.';
+			} else if (stderr.includes ('not a git repository')) {
+				userMsg = '현재 디렉토리가 git 저장소가 아닙니다.';
+			} else if (stderr.includes ('could not find')) {
+				userMsg = `base 브랜치 "${data.base}"를 찾을 수 없습니다. 리모트에 존재하는지 확인하세요.`;
+			} else {
+				userMsg = `PR 생성 실패: ${stderr.trim ().split ('\n')[0] || err.message}`;
+			}
 			panel.webview.postMessage ({
 				command: 'error',
-				text: `PR 생성 실패: ${err.message}`,
+				text: userMsg,
 			});
 		} finally {
 			// Cleanup temp files (성공·실패 모두)

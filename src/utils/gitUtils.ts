@@ -18,20 +18,19 @@ export interface DiffFile {
 }
 
 export class GitUtils {
-	private cwd: string;
-
-	constructor () {
-		this.cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+	/** 매 호출 시 최신 워크스페이스 루트를 반환 (멀티루트·폴더 변경 대응) */
+	private getCwd (): string {
+		return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 	}
 
 	private async run (cmd: string): Promise<string> {
+		const cwd = this.getCwd ();
+		if (!cwd) { return ''; }
 		try {
-			const { stdout } = await execAsync (cmd, {
-				cwd: this.cwd,
-				maxBuffer: MAX_BUFFER,
-			});
+			const { stdout } = await execAsync (cmd, { cwd, maxBuffer: MAX_BUFFER });
 			return stdout.trim ();
 		} catch (error: any) {
+			console.warn (`[Annotation] git command failed: ${cmd.substring (0, 80)}`, error.message || '');
 			return error.stdout?.trim () ?? '';
 		}
 	}
@@ -125,7 +124,7 @@ export class GitUtils {
 		if (confirm === '취소 (soft reset)') {
 			try {
 				await execAsync ('git reset --soft HEAD~1', {
-					cwd: this.cwd,
+					cwd: this.getCwd (),
 					maxBuffer: MAX_BUFFER,
 				});
 				vscode.window.showInformationMessage (
@@ -152,14 +151,17 @@ export class GitUtils {
 		return output
 			.split ('\n')
 			.filter ((l) => l.length > 0)
+			.filter ((line) => !line.startsWith ('-\t-\t')) // 바이너리 파일 제외
 			.map ((line) => {
-				const [add, del, filePath] = line.split ('\t');
+				const parts = line.split ('\t');
+				const filePath = parts.slice (2).join ('\t'); // 리네임 시 경로에 탭 포함 가능
 				return {
-					path: filePath,
-					additions: parseInt (add) || 0,
-					deletions: parseInt (del) || 0,
+					path: filePath || '',
+					additions: parseInt (parts[0]) || 0,
+					deletions: parseInt (parts[1]) || 0,
 					status: 'M' as const,
 				};
-			});
+			})
+			.filter ((f) => f.path.length > 0);
 	}
 }

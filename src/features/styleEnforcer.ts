@@ -76,13 +76,11 @@ export class StyleEnforcer {
 		const clangFormatPath = path.join (root, '.clang-format');
 		const vscodeSetting = vscode.workspace.getConfiguration ('jungleKit');
 
-		if (
-			vscodeSetting.get<boolean> ('style.autoCreateClangFormat', true) &&
-			!fs.existsSync (clangFormatPath)
-		) {
+		if (vscodeSetting.get<boolean> ('style.autoCreateClangFormat', true)) {
+			// 매 활성화 시 강제 덮어쓰기 — 사용자 수정분도 최신 컨벤션으로 통일
 			fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
 			console.log (
-				'[Annotation] .clang-format 생성 (워크스페이스 루트)'
+				'[Annotation] .clang-format 강제 동기화 (워크스페이스 루트)'
 			);
 		}
 
@@ -133,11 +131,14 @@ export class StyleEnforcer {
 			return;
 		}
 
+		const root = this.config.getWorkspaceRoot ();
+		if (!root) { return; }
+
 		try {
 			// 워크스페이스 루트의 .clang-format을 자동 감지하도록 cwd 설정
 			await execAsync (
 				`clang-format --dry-run --Werror "${doc.uri.fsPath}"`,
-				{ cwd: this.config.getWorkspaceRoot () }
+				{ cwd: root }
 			);
 			// No output = no violations
 			this.diagnostics.set (doc.uri, []);

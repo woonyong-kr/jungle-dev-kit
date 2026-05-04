@@ -2117,6 +2117,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 	private async getAuthorName (): Promise<string> {
 		const root = this.config.getWorkspaceRoot ();
+		if (!root) { return 'unknown'; }
 		try {
 			const { stdout } = await execAsync ('git config user.name', { cwd: root });
 			return stdout.trim () || 'unknown';
@@ -2127,6 +2128,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 	private async getCurrentCommitHash (): Promise<string | null> {
 		const root = this.config.getWorkspaceRoot ();
+		if (!root) { return null; }
 		try {
 			const { stdout } = await execAsync ('git rev-parse HEAD', { cwd: root });
 			return stdout.trim () || null;
@@ -2673,6 +2675,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		let configDir: string;
 		const platform = process.platform;
 		const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+		if (!homeDir) {
+			console.warn ('[Annotation] HOME / USERPROFILE 환경변수 없음 — 단축키 적용 건너뜀');
+			return;
+		}
 
 		if (platform === 'darwin') {
 			configDir = path.join (homeDir, 'Library', 'Application Support', 'Code', 'User');
