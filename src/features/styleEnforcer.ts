@@ -60,8 +60,6 @@ KeepEmptyLinesAtTheStartOfBlocks: false
 export class StyleEnforcer {
 	private config: ConfigManager;
 	private diagnostics: vscode.DiagnosticCollection;
-	private clangFormatPath: string = '';
-
 	constructor (config: ConfigManager) {
 		this.config = config;
 		this.diagnostics = vscode.languages.createDiagnosticCollection (
@@ -70,27 +68,30 @@ export class StyleEnforcer {
 	}
 
 	async activate (context: vscode.ExtensionContext): Promise<void> {
-		// Store .clang-format in .jungle-kit/styles/ (not workspace root)
+		// .clang-format은 워크스페이스 루트에 생성해야
+		// VS Code의 formatOnSave와 CLI clang-format 모두 자동 감지한다.
 		const root = this.config.getWorkspaceRoot ();
 		if (!root) {return;}
 
-		const stylesDir = path.join (root, '.jungle-kit', 'styles');
-		const clangFormatPath = path.join (stylesDir, '.clang-format');
+		const clangFormatPath = path.join (root, '.clang-format');
 		const vscodeSetting = vscode.workspace.getConfiguration ('jungleKit');
 
 		if (
 			vscodeSetting.get<boolean> ('style.autoCreateClangFormat', true) &&
 			!fs.existsSync (clangFormatPath)
 		) {
-			if (!fs.existsSync (stylesDir)) {
-				fs.mkdirSync (stylesDir, { recursive: true });
-			}
 			fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
 			console.log (
-				'[Annotation] .jungle-kit/styles/.clang-format 생성'
+				'[Annotation] .clang-format 생성 (워크스페이스 루트)'
 			);
 		}
-		this.clangFormatPath = clangFormatPath;
+
+		// 기존 .jungle-kit/styles/ 에 있던 파일 → 루트로 마이그레이션
+		const legacyPath = path.join (root, '.jungle-kit', 'styles', '.clang-format');
+		if (fs.existsSync (legacyPath)) {
+			try { fs.unlinkSync (legacyPath); } catch {}
+			console.log ('[Annotation] 레거시 .jungle-kit/styles/.clang-format 제거');
+		}
 
 		// Ensure formatOnSave is enabled for C/C++ files
 		// Use language-override sections in workspace settings
@@ -133,11 +134,9 @@ export class StyleEnforcer {
 		}
 
 		try {
-			const styleFlag = this.clangFormatPath
-				? `--style="file:${this.clangFormatPath}"`
-				: '';
+			// 워크스페이스 루트의 .clang-format을 자동 감지하도록 cwd 설정
 			await execAsync (
-				`clang-format --dry-run --Werror ${styleFlag} "${doc.uri.fsPath}"`,
+				`clang-format --dry-run --Werror "${doc.uri.fsPath}"`,
 				{ cwd: this.config.getWorkspaceRoot () }
 			);
 			// No output = no violations

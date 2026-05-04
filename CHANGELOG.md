@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.17.2] - 2025-05-05
+
+### Fixed
+- `.clang-format` 파일이 `.jungle-kit/styles/`에 생성되어 VS Code `formatOnSave`가 인식하지 못하던 치명적 버그 수정 — 워크스페이스 루트에 생성하도록 변경, 기존 레거시 파일 자동 마이그레이션
+- 사이드바 트리 펼치기/접기 오류 수정 — 모든 TreeItem에 `id` 속성 추가, VS Code 내부 상태 관리에 위임
+- **치명적**: `reviewInProgress` 플래그 조기 리턴 시 리셋 안됨 → 자동 리뷰 영구 차단 수정
+- 다중 선택 드래그 정렬 `Infinity - Infinity = NaN` 비결정적 순서 수정
+- 리뷰 자동 생성 루프 `Date.now()` ID 중복 → `generateId()` 교체
+- `_scanTimer`/`EventEmitter` 익스텐션 비활성화 시 리소스 누수 수정
+- `openAnnotationInEditor` root 불일치 수정
+- PR 임시 파일 실패 시 미삭제 수정
+
+### Changed
+- `@review` 색상 골드(#FFD54F) → 주황(#FB8C00) 변경
+
 ## [0.17.1] - 2025-05-05
 
 ### Fixed
