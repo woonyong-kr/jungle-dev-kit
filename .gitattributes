@@ -1,3 +1,5 @@
-
 *.c filter=junglekit-local
 *.h filter=junglekit-local
+
+*.c filter=jungle-local
+*.h filter=jungle-local

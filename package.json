@@ -23,12 +23,14 @@
     "Other"
   ],
   "keywords": [
+    "annotation",
+    "todo",
+    "bookmark",
+    "tag",
+    "comment",
     "pintos",
-    "os",
-    "team",
     "code-review",
-    "git",
-    "collaboration"
+    "git"
   ],
   "activationEvents": [
     "workspaceContains:**/Makefile.build",
