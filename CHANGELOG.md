@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.16.0] - 2025-05-04
+
+### Changed
+- `addTagAtCursor` 및 `searchTags` 필터에서 `@endregion` 제거 — `SIDEBAR_TAG_TYPES` 사용
+- `@endregion`을 사이드바에서 숨김 — `@region`만 표시
+- `@region` 중첩 시 사이드바에서 트리 구조로 표시 (스택 기반 부모-자식 매칭)
+- 자식이 있는 `@region` 아이템에도 편집/삭제 버튼 노출
+
+### Removed
+- `gitUtils.ts` 미사용 메서드 7개 제거
+- `shadowDiff.ts` 미사용 `getBranchChanges()`, `getTeamMembers()` 제거
+- `apiKeyManager.ts` 미사용 `hasKey()` 제거
+- `tagSystem.ts` 미사용 `execSync` import 제거
+
+### Fixed
+- **치명적**: git clean filter awk 패턴에 줄 시작 앵커(`^`)가 없어 인라인 주석(`int x; // @todo`)이 코드와 함께 커밋에서 제거되던 버그 수정
+- `addTag` 내용에 `*/`가 포함되면 C 주석이 조기 종료되던 버그 수정 — `*/` → `* /` 이스케이프
+- `.gitattributes`에 `.h` 필터 줄 추가 시 이전 줄과 병합될 수 있던 버그 수정 — 개행 보장
+- `buildRegionTree`에서 필터 적용 시 `@endregion`이 제외되어 트리 구조가 깨지던 버그 수정 — 전체 annotations에서 region/endregion 추출
+- `environmentValidator.ts` OutputChannel 매 호출 생성 리소스 누수 수정 — 싱글턴 멤버 변수로 교체
+- 블록 주석 파싱에서 `*` prefix 없는 연속 줄(들여쓰기만)을 인식하지 못해 `break` 되던 버그 수정 — `*/` 전까지 무조건 스캔
+- 블록 주석 내부 줄이 재스캔되어 중복 어노테이션이 등록되던 버그 수정 — `i = blockEndLine` 점프 추가
+- `syncBreakpoints`에서 실행 가능 줄이 없을 때 0번 줄에 중단점이 설정되던 버그 수정 — `bpLine = -1` 기본값 + skip 가드
+- `applyKeybindings` needsComma 정규식이 `]`를 매칭하여 배열 끝 뒤에 불필요한 쉼표를 삽입하던 버그 수정
+- `displayLabel`/`sortOrder`가 줄 이동 시 유실되던 버그 수정 — content 기반 fallback 맵 추가
+- **치명적**: `.gitattributes`의 필터 이름(`junglekit-local`)과 git config의 필터 이름(`jungle-local`)이 불일치하여 clean filter가 동작하지 않던 버그 수정 — 이전 이름 자동 마이그레이션 추가
+- git filter 스크립트 경로에 공백이 포함될 때 shell 인자 분리로 필터가 실패하던 버그 수정 — 경로를 따옴표로 감쌈
+- `syncWatchExpressions`에서 실패한 조사식도 영구 등록되어 재시도가 안 되던 버그 수정 — 성공 항목만 기록
+- `git log` 포맷 구분자 `|`가 커밋 메시지에 포함되면 파싱이 깨지던 버그 수정 — NULL 바이트 구분자로 교체
+- `clang-format` 스타일 경로에 공백 포함 시 실패하던 버그 수정 — 따옴표 추가
+- `getDiffAgainst`, `getChangedFiles`, `getAheadBehind`에서 detached HEAD 방어 추가
+- `smartCommit.ts` Git 확장 미활성화 상태에서 `exports.getAPI` TypeError 수정 — `isActive` 체크 추가
+- `shadowDiff.ts` OutputChannel 매 호출 생성 리소스 누수 수정
+- `prPanel.ts` detached HEAD 상태 빈 브랜치 `git push` 위험 수정
+- `smartCommit.ts` SCM 설정 실패 시 무음 종료 수정 — 클립보드 폴백
+- `environmentValidator.ts` 전체 통과 시 피드백 누락 수정
+- `tagSystem.ts` `setupAnnotationFilter` `execSync` 블로킹을 `execAsync`로 교체
+
+### Refactored
+- `extension.ts` contextValue ID 추출 정규식 중복을 `extractTagId()` 헬퍼로 통합
+- `parseDiffAdditions` hunk 이중 파싱 수정 — 내부 루프 종료 후 외부 루프 인덱스를 점프
+- `parseDiffAdditions` `\ No newline at end of file` 줄이 context로 취급되어 줄 번호가 +1 되던 버그 수정
+- `handleDrop` 다중 선택 드래그 시 `targetIdx=-1`로 잘못된 위치에 삽입되던 버그 수정
+- `undoLastCommit` git reset 실패 시 거짓 성공 메시지를 표시하던 버그 수정 — 에러 메시지 표시로 교체
+
 ## [0.15.2] - 2025-05-04
 
 ### Fixed

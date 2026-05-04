@@ -18,11 +18,6 @@ export class APIKeyManager {
 		return this.secrets.get (SECRET_KEY);
 	}
 
-	async hasKey (): Promise<boolean> {
-		const key = await this.secrets.get (SECRET_KEY);
-		return key !== undefined && key.length > 0;
-	}
-
 	async setKey (): Promise<void> {
 		const key = await vscode.window.showInputBox ({
 			prompt: 'OpenAI API Key를 입력하세요',

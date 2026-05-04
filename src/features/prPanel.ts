@@ -229,6 +229,10 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 		// Push current branch first
 		try {
 			const branch = await this.git.getCurrentBranch ();
+			if (!branch) {
+				vscode.window.showErrorMessage ('detached HEAD 상태에서는 PR을 생성할 수 없습니다.');
+				return;
+			}
 			const safeBranch = branch.replace (/[^a-zA-Z0-9_\-\/.]/g, '');
 			await execAsync (`git push -u origin ${safeBranch}`, { cwd: root });
 		} catch {

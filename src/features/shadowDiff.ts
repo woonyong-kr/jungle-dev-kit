@@ -44,6 +44,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 
 	private _onDidChangeCodeLenses = new vscode.EventEmitter<void> ();
 	readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
+	private _outputChannel: vscode.OutputChannel | null = null;
 
 	constructor (config: ConfigManager, git: GitUtils) {
 		this.config = config;
@@ -382,7 +383,10 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 	}
 
 	async showShadowDiff (change: BranchChange, hunk: BranchChange['hunks'][0]): Promise<void> {
-		const channel = vscode.window.createOutputChannel ('Annotation: Shadow Diff');
+		if (!this._outputChannel) {
+			this._outputChannel = vscode.window.createOutputChannel ('Annotation: Shadow Diff');
+		}
+		const channel = this._outputChannel;
 		channel.clear ();
 		channel.appendLine (`Branch: ${change.branch}`);
 		channel.appendLine (`Author: ${change.author}`);
@@ -437,33 +441,4 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 		return new vscode.Hover (contents);
 	}
 
-	// --- Public getters for team activity ---
-
-	getBranchChanges (): BranchChange[] {
-		return this.branchChanges;
-	}
-
-	getTeamMembers (): Array<{ name: string; branch: string; lastActive: string; fileCount: number }> {
-		const memberMap = new Map<string, { branch: string; lastActive: string; files: Set<string> }> ();
-
-		for (const change of this.branchChanges) {
-			const existing = memberMap.get (change.author);
-			if (existing) {
-				existing.files.add (change.file);
-			} else {
-				memberMap.set (change.author, {
-					branch: change.branch,
-					lastActive: change.lastCommitDate,
-					files: new Set ([change.file]),
-				});
-			}
-		}
-
-		return Array.from (memberMap.entries ()).map (([name, data]) => ({
-			name,
-			branch: data.branch,
-			lastActive: data.lastActive,
-			fileCount: data.files.size,
-		}));
-	}
 }

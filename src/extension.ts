@@ -11,6 +11,12 @@ import { APIKeyManager } from './utils/apiKeyManager';
 import { ConfigManager } from './utils/configManager';
 import { GitUtils } from './utils/gitUtils';
 
+/** TreeItem의 contextValue에서 annotation ID를 추출한다 */
+function extractTagId (item: any): string | undefined {
+	const match = item?.contextValue?.match (/tag-\w+-(.+)/) || item?.contextValue?.match (/^tagRegion-(.+)$/);
+	return match?.[1];
+}
+
 export async function activate (context: vscode.ExtensionContext) {
 	const config = new ConfigManager (context);
 	const git = new GitUtils ();
@@ -50,8 +56,8 @@ export async function activate (context: vscode.ExtensionContext) {
 		['jungleKit.addWarning', () => tagSystem.addTag ('warn')],
 		['jungleKit.addBreakpoint', () => tagSystem.addTag ('breakpoint')],
 		['jungleKit.resolveTagInline', (item: any) => {
-			const match = item?.contextValue?.match (/tag-\w+-(.+)/);
-			if (match) { tagSystem.deleteAnnotation (match[1]); }
+			const id = extractTagId (item);
+			if (id) { tagSystem.deleteAnnotation (id); }
 		}],
 
 		// Tag toolbar
@@ -72,8 +78,8 @@ export async function activate (context: vscode.ExtensionContext) {
 			if (match) { tagSystem.clearFileAnnotations (match[1]); }
 		}],
 		['jungleKit.editTag', (item: any) => {
-			const match = item?.contextValue?.match (/tag-\w+-(.+)/);
-			if (match) { tagSystem.editAnnotation (match[1]); }
+			const id = extractTagId (item);
+			if (id) { tagSystem.editAnnotation (id); }
 		}],
 		['jungleKit.goToTag', (tag: any) => {
 			if (!tag?.file) {return;}

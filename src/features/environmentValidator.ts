@@ -14,6 +14,7 @@ interface CheckResult {
 
 export class EnvironmentValidator {
 	private config: ConfigManager;
+	private _outputChannel: vscode.OutputChannel | null = null;
 
 	constructor (config: ConfigManager) {
 		this.config = config;
@@ -87,10 +88,14 @@ export class EnvironmentValidator {
 	private showResults (results: CheckResult[]): void {
 		const failed = results.filter ((r) => !r.passed);
 		if (failed.length === 0) {
+			vscode.window.showInformationMessage ('[Annotation] 환경 검증 완료 — 모든 항목이 통과했습니다.');
 			return;
 		}
 
-		const channel = vscode.window.createOutputChannel ('Annotation: Environment');
+		if (!this._outputChannel) {
+			this._outputChannel = vscode.window.createOutputChannel ('Annotation: Environment');
+		}
+		const channel = this._outputChannel;
 		channel.clear ();
 		channel.appendLine ('=== Environment Validation ===\n');
 		for (const r of results) {

@@ -93,14 +93,23 @@ export class SmartCommit {
 
 		// SCM input box에 바로 설정
 		const gitExt = vscode.extensions.getExtension ('vscode.git');
-		if (gitExt) {
-			const gitApi = gitExt.exports.getAPI (1);
-			if (gitApi && gitApi.repositories.length > 0) {
-				gitApi.repositories[0].inputBox.value = suggestions;
-				vscode.window.showInformationMessage (
-					`[Annotation] 커밋 메시지가 설정되었습니다.`
-				);
-			}
+		if (!gitExt) {
+			vscode.window.showWarningMessage ('Git 확장을 찾을 수 없습니다. 커밋 메시지를 클립보드에 복사합니다.');
+			await vscode.env.clipboard.writeText (suggestions);
+			return;
 		}
+		if (!gitExt.isActive) {
+			await gitExt.activate ();
+		}
+		const gitApi = gitExt.exports.getAPI (1);
+		if (!gitApi || gitApi.repositories.length === 0) {
+			vscode.window.showWarningMessage ('Git 리포지토리를 찾을 수 없습니다. 커밋 메시지를 클립보드에 복사합니다.');
+			await vscode.env.clipboard.writeText (suggestions);
+			return;
+		}
+		gitApi.repositories[0].inputBox.value = suggestions;
+		vscode.window.showInformationMessage (
+			`[Annotation] 커밋 메시지가 설정되었습니다.`
+		);
 	}
 }

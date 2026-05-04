@@ -134,7 +134,7 @@ export class StyleEnforcer {
 
 		try {
 			const styleFlag = this.clangFormatPath
-				? `--style=file:${this.clangFormatPath}`
+				? `--style="file:${this.clangFormatPath}"`
 				: '';
 			await execAsync (
 				`clang-format --dry-run --Werror ${styleFlag} "${doc.uri.fsPath}"`,

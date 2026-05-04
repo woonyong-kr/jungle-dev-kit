@@ -2,7 +2,7 @@
   "name": "jungle-dev-kit",
   "displayName": "Annotation",
   "description": "코드 주석 태그로 팀 협업 — @todo, @bookmark, @review, @warn, @breakpoint, @note, @region 태그를 사이드바에서 관리하고, git diff에서 자동 제외",
-  "version": "0.15.2",
+  "version": "0.16.0",
   "publisher": "woonyong",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -356,12 +356,12 @@
       "view/item/context": [
         {
           "command": "jungleKit.editTag",
-          "when": "viewItem =~ /^tag-/",
+          "when": "viewItem =~ /^tag-|^tagRegion-/",
           "group": "inline@1"
         },
         {
           "command": "jungleKit.resolveTagInline",
-          "when": "viewItem =~ /^tag-/",
+          "when": "viewItem =~ /^tag-|^tagRegion-/",
           "group": "inline@2"
         },
         {
