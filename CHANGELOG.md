@@ -15,6 +15,11 @@
 - `tagSystem.ts` 미사용 `execSync` import 제거
 
 ### Fixed
+- `deleteAnnotation` 연속 호출 시 디바운스 스캔의 줄 번호 밀림으로 삭제한 어노테이션이 되살아나던 레이스 컨디션 수정 — 타이머 취소 + 즉시 재스캔
+- `scanDocument` content fallback 맵에서 동일 타입+내용 어노테이션의 displayLabel/sortOrder가 마지막 값으로 덮어써지던 버그 수정 — 배열 기반 분배로 교체
+- 단축키 설정 WebView에서 `s.label`, `s.description`, `s.id`, `e.message`가 HTML 이스케이프 없이 innerHTML에 삽입되던 XSS 취약점 수정 — `esc()` 함수 적용
+- `handleDrop` 다중 선택 드래그 시 `draggedAnns`가 배열 순서대로 삽입되어 사이드바 정렬과 다를 수 있던 버그 수정 — sortOrder 기준 정렬 후 삽입
+- `prPanel` `handleAIGenerate`에서 `_currentDiff`가 빈 문자열일 때 `||`로 원래 diff에 fallback되던 버그 수정 — `??` (nullish coalescing)로 교체
 - **치명적**: git clean filter awk 패턴에 줄 시작 앵커(`^`)가 없어 인라인 주석(`int x; // @todo`)이 코드와 함께 커밋에서 제거되던 버그 수정
 - `addTag` 내용에 `*/`가 포함되면 C 주석이 조기 종료되던 버그 수정 — `*/` → `* /` 이스케이프
 - `.gitattributes`에 `.h` 필터 줄 추가 시 이전 줄과 병합될 수 있던 버그 수정 — 개행 보장

@@ -102,7 +102,7 @@ export class PRPanel {
 		this._currentChangedFiles = changedFiles;
 	}
 
-	private _currentDiff: string = '';
+	private _currentDiff: string | undefined;
 	private _currentChangedFiles: Array<{ path: string; additions: number; deletions: number }> = [];
 
 	/** 공통 base 브랜치 후보를 우선순위에 따라 추정 */
@@ -124,7 +124,7 @@ export class PRPanel {
 		reviewTags: Array<{ file: string; line: number; content: string }>
 	): Promise<void> {
 		// base 변경 시 갱신된 값 사용
-		const diff = this._currentDiff || _diff;
+		const diff = this._currentDiff ?? _diff;
 		const changedFiles = this._currentChangedFiles.length > 0 ? this._currentChangedFiles : _changedFiles;
 		const apiKey = await this.apiKeys.getKey ();
 		if (!apiKey) {

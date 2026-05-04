@@ -99,7 +99,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 					{ location: vscode.ProgressLocation.Notification, title: 'Pull 중...' },
 					async () => {
 						const root = this.config.getWorkspaceRoot ();
-						await execAsync ('git pull --rebase', { cwd: root });
+						await execAsync ('git pull --rebase', { cwd: root, maxBuffer: MAX_BUFFER });
 					}
 				);
 				vscode.window.showInformationMessage ('Pull 완료');
@@ -111,7 +111,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 					{ location: vscode.ProgressLocation.Notification, title: 'Push 중...' },
 					async () => {
 						const root = this.config.getWorkspaceRoot ();
-						await execAsync (`git push origin ${sanitizeRef (branch)}`, { cwd: root });
+						await execAsync (`git push origin ${sanitizeRef (branch)}`, { cwd: root, maxBuffer: MAX_BUFFER });
 					}
 				);
 				vscode.window.showInformationMessage ('Push 완료');

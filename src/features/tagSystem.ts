@@ -300,18 +300,22 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		// 1차 키: type+line, 2차 키(fallback): type+content — 줄 이동 시에도 복원
 		const labelMap = new Map<string, string> ();
 		const orderMap = new Map<string, number> ();
-		const labelMapByContent = new Map<string, string> ();
-		const orderMapByContent = new Map<string, number> ();
+		const labelMapByContent = new Map<string, string[]> ();
+		const orderMapByContent = new Map<string, number[]> ();
 		for (const ann of this.annotations.filter ((a) => a.file === relativePath)) {
 			const key = `${ann.type}:${ann.line}`;
 			const contentKey = `${ann.type}:${ann.content}`;
 			if (ann.displayLabel) {
 				labelMap.set (key, ann.displayLabel);
-				labelMapByContent.set (contentKey, ann.displayLabel);
+				const lblArr = labelMapByContent.get (contentKey) || [];
+				lblArr.push (ann.displayLabel);
+				labelMapByContent.set (contentKey, lblArr);
 			}
 			if (ann.sortOrder !== undefined) {
 				orderMap.set (key, ann.sortOrder);
-				orderMapByContent.set (contentKey, ann.sortOrder);
+				const ordArr = orderMapByContent.get (contentKey) || [];
+				ordArr.push (ann.sortOrder);
+				orderMapByContent.set (contentKey, ordArr);
 			}
 		}
 
@@ -335,12 +339,14 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			if (labelMap.has (key)) {
 				ann.displayLabel = labelMap.get (key)!;
 			} else if (labelMapByContent.has (contentKey)) {
-				ann.displayLabel = labelMapByContent.get (contentKey)!;
+				const lblArr = labelMapByContent.get (contentKey)!;
+				if (lblArr.length > 0) { ann.displayLabel = lblArr.shift ()!; }
 			}
 			if (orderMap.has (key)) {
 				ann.sortOrder = orderMap.get (key)!;
 			} else if (orderMapByContent.has (contentKey)) {
-				ann.sortOrder = orderMapByContent.get (contentKey)!;
+				const ordArr = orderMapByContent.get (contentKey)!;
+				if (ordArr.length > 0) { ann.sortOrder = ordArr.shift ()!; }
 			}
 			this.annotations.push (ann);
 		}
@@ -619,6 +625,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const ann = this.annotations.find ((a) => a.id === id);
 		if (!ann) { return; }
 
+		// 디바운스된 스캔 타이머 취소 — 줄 번호 밀림으로 인한 재추가 방지
+		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
+
 		// 파일에서 해당 주석 줄 삭제
 		const root = this.config.getWorkspaceRoot ();
 		if (root) {
@@ -636,6 +645,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 						await vscode.workspace.applyEdit (edit);
 					}
 				}
+				// edit 후 즉시 재스캔 — 나머지 annotation 줄 번호 갱신
+				this.scanDocument (doc);
 			} catch { /* ignore */ }
 		}
 
@@ -991,14 +1002,15 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			dragAnn.sortOrder = targetAnn.sortOrder!;
 			targetAnn.sortOrder = tmpOrder;
 		} else {
-			// 다중 선택: 기존 insert 방식
+			// 다중 선택: 기존 insert 방식 (정렬 순서 유지)
 			const typeAnns = this.annotations
 				.filter ((a) => a.type === type)
 				.sort ((a, b) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
+			const draggedSorted = typeAnns.filter ((a) => draggedIds.includes (a.id));
 			const remaining = typeAnns.filter ((a) => !draggedIds.includes (a.id));
 			let targetIdx = remaining.findIndex ((a) => a.id === targetAnn.id);
 			if (targetIdx === -1) { targetIdx = remaining.length; }
-			remaining.splice (targetIdx, 0, ...draggedAnns);
+			remaining.splice (targetIdx, 0, ...draggedSorted);
 			remaining.forEach ((a, i) => { a.sortOrder = i; });
 		}
 
@@ -1345,7 +1357,11 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 			const uri = vscode.Uri.file (filePath);
 			// 주석·빈 줄을 건너뛰고 실제 실행 가능한 코드 라인을 찾는다
-			const fileLines = fs.readFileSync (filePath, 'utf-8').split ('\n');
+			// 열려있는 문서가 있으면 메모리(미저장 포함)에서 읽어 줄번호 일관성 유지
+			const openDoc = vscode.workspace.textDocuments.find ((d) => d.uri.fsPath === filePath);
+			const fileLines = openDoc
+				? openDoc.getText ().split ('\n')
+				: fs.readFileSync (filePath, 'utf-8').split ('\n');
 			const startLine = (ann.lineEnd ?? ann.line) + 1;
 			if (startLine >= fileLines.length) { continue; }
 			let bpLine = -1;
@@ -1451,7 +1467,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			new vscode.RelativePattern (path.join (root, '.git'), '{HEAD,MERGE_HEAD,FETCH_HEAD,refs/heads/**}')
 		);
 
+		let headCheckTimer: NodeJS.Timeout | null = null;
+
 		const checkHead = async () => {
+			headCheckTimer = null;
 			const currentHead = await this.getCurrentCommitHash ();
 			if (!currentHead || currentHead === this._lastKnownHead) { return; }
 
@@ -1463,10 +1482,16 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 		};
 
+		const debouncedCheckHead = () => {
+			if (headCheckTimer) { clearTimeout (headCheckTimer); }
+			headCheckTimer = setTimeout (checkHead, 1000);
+		};
+
 		context.subscriptions.push (
-			headWatcher.onDidChange (() => setTimeout (checkHead, 1000)),
-			headWatcher.onDidCreate (() => setTimeout (checkHead, 1000)),
-			headWatcher
+			headWatcher.onDidChange (debouncedCheckHead),
+			headWatcher.onDidCreate (debouncedCheckHead),
+			headWatcher,
+			{ dispose: () => { if (headCheckTimer) { clearTimeout (headCheckTimer); headCheckTimer = null; } } }
 		);
 	}
 
@@ -1575,8 +1600,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		// QuickPick으로 커밋 선택
 		const commits = logOutput.split ('\n').map ((line) => {
 			const spaceIdx = line.indexOf (' ');
-			const hash = line.substring (0, spaceIdx);
-			const message = line.substring (spaceIdx + 1);
+			const hash = spaceIdx > 0 ? line.substring (0, spaceIdx) : line;
+			const message = spaceIdx > 0 ? line.substring (spaceIdx + 1) : '(no message)';
 			return { hash, message };
 		});
 
@@ -2441,6 +2466,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
   let shortcuts = ${shortcutsJson};
   let editingId = null;
 
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
   function renderKeyBadge(keyStr) {
     const parts = keyStr.split('+');
     return parts.map((p, i) => {
@@ -2484,9 +2515,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
       groups[g].forEach(s => {
         const key = s.mac || s.key;
         const isEditing = editingId === s.id;
-        html += '<tr data-id="' + s.id + '">';
-        html += '<td class="sc-label">' + s.label + '</td>';
-        html += '<td class="sc-desc">' + (s.description || '') + '</td>';
+        html += '<tr data-id="' + esc(s.id) + '">';
+        html += '<td class="sc-label">' + esc(s.label) + '</td>';
+        html += '<td class="sc-desc">' + esc(s.description || '') + '</td>';
         if (isEditing) {
           html += '<td colspan="2">';
           html += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">';
@@ -2500,7 +2531,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
           html += '</td>';
         } else {
           html += '<td><span class="key-badge">' + renderKeyBadge(key) + '</span></td>';
-          html += '<td class="col-edit"><button class="btn-edit" onclick="startEdit(\'' + s.id + '\')" title="수정">&#x270E;</button></td>';
+          html += '<td class="col-edit"><button class="btn-edit" onclick="startEdit(\'' + esc(s.id) + '\')" title="수정">&#x270E;</button></td>';
         }
         html += '</tr>';
       });
@@ -2577,7 +2608,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
   });
 
   try { render(); } catch(e) {
-    document.getElementById('content').innerHTML = '<p style="color:var(--vscode-errorForeground);padding:20px;">렌더링 오류: ' + e.message + '</p>';
+    document.getElementById('content').innerHTML = '<p style="color:var(--vscode-errorForeground);padding:20px;">렌더링 오류: ' + esc(e.message) + '</p>';
   }
 </script>
 </body>
@@ -2624,12 +2655,26 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			`\\s*${BEGIN_MARKER.replace (/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${END_MARKER.replace (/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*,?`,
 			'g'
 		);
+		const contentBeforeRemoval = content;
 		content = content.replace (markerRegex, '');
 
 		// 새 Annotation 블록 생성
 		// jungleKit 커맨드는 package.json keybinding으로 등록되므로 스킵
 		const filtered = shortcuts.filter ((s) => !s.command.startsWith ('jungleKit.'));
-		if (filtered.length === 0) { return; }
+		if (filtered.length === 0) {
+			// 블록이 제거되었으면 변경된 내용을 저장
+			if (content !== contentBeforeRemoval) {
+				try {
+					if (!fs.existsSync (configDir)) {
+						fs.mkdirSync (configDir, { recursive: true });
+					}
+					fs.writeFileSync (keybindingsPath, content);
+				} catch (err) {
+					console.error ('[Annotation] keybindings.json 저장 실패:', err);
+				}
+			}
+			return;
+		}
 
 		const newEntries = filtered.map ((s) => {
 			const key = platform === 'darwin' ? (s.mac || s.key) : s.key;
