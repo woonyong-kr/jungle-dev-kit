@@ -107,7 +107,7 @@ export class ConfigManager {
 		}
 
 		// Create subdirectories
-		const dirs = ['reviews', 'knowledge', 'notes'];
+		const dirs = ['notes'];
 		for (const dir of dirs) {
 			const dirPath = path.join (this.configDir, dir);
 			if (!fs.existsSync (dirPath)) {
