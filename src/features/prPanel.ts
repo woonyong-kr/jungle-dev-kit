@@ -93,6 +93,7 @@ export class PRPanel {
 
 		// Handle messages from webview
 		panel.webview.onDidReceiveMessage (async (message) => {
+			try {
 			switch (message.command) {
 			case 'generateAI':
 				await this.handleAIGenerate (panel, diff, currentBranch, changedFiles, commits, reviewTags);
@@ -114,6 +115,15 @@ export class PRPanel {
 				this._currentChangedFiles = newChangedFiles;
 				break;
 			}
+			}
+			} catch (e: any) {
+				console.error ('[Annotation] PR panel message handler error:', e);
+				try {
+					panel.webview.postMessage ({
+						command: 'error',
+						text: `예기치 않은 오류: ${e.message || e}`,
+					});
+				} catch { /* panel disposed */ }
 			}
 		});
 
@@ -282,6 +292,7 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 		}
 
 		// Push current branch first
+		panel.webview.postMessage ({ command: 'status', text: '브랜치 푸시 중...' });
 		const branch = await this.git.getCurrentBranch ();
 		if (!branch) {
 			panel.webview.postMessage ({
@@ -309,6 +320,7 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 		}
 
 		// Create PR
+		panel.webview.postMessage ({ command: 'status', text: 'PR 생성 중...' });
 		const tempDir = path.join (root, '.jungle-kit');
 		if (!fs.existsSync (tempDir)) {
 			fs.mkdirSync (tempDir, { recursive: true });
@@ -888,6 +900,11 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 					'<div class="message error"><span class="msg-icon">&#10060;</span> 제목을 입력하세요.</div>';
 				return;
 			}
+			// 버튼 비활성화 + 로딩 표시
+			const btn = document.querySelector('.btn-create');
+			if (btn) { btn.disabled = true; btn.textContent = 'PR 생성 중...'; }
+			document.getElementById('messageArea').innerHTML =
+				'<div class="message" style="color:#90CAF9;">&#9203; PR 생성 중... 잠시 기다려주세요.</div>';
 			vscode.postMessage({
 				command: 'createPR',
 				data: {
@@ -912,11 +929,20 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 					area.innerHTML = '<div class="message success"><span class="msg-icon">&#10003;</span> AI 생성 완료</div>';
 					setTimeout(() => { area.innerHTML = ''; }, 3000);
 					break;
-				case 'error':
+				case 'error': {
 					area.innerHTML = '<div class="message error"><span class="msg-icon">&#10060;</span> ' + esc(msg.text) + '</div>';
+					const errBtn = document.querySelector('.btn-create');
+					if (errBtn) { errBtn.disabled = false; errBtn.textContent = 'PR 만들기'; }
 					break;
-				case 'success':
+				}
+				case 'success': {
 					area.innerHTML = '<div class="message success"><span class="msg-icon">&#10003;</span> ' + esc(msg.text) + '</div>';
+					const okBtn = document.querySelector('.btn-create');
+					if (okBtn) { okBtn.disabled = true; okBtn.textContent = 'PR 생성 완료'; }
+					break;
+				}
+				case 'status':
+					area.innerHTML = '<div class="message" style="color:#90CAF9;">&#9203; ' + esc(msg.text) + '</div>';
 					break;
 				case 'updateFiles':
 					// base 브랜치 변경 시 파일 목록과 통계를 갱신

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0] - 2025-05-05
+
+### Fixed
+- **치명적**: PR 패널 `onDidReceiveMessage` 핸들러에서 예외 발생 시 무음 실패 → 전체 try/catch + 에러 메시지 표시
+- PR 생성 버튼 클릭 후 반응 없음 → "PR 생성 중..." 로딩 상태 표시 + 버튼 비활성화
+- PR 각 단계(푸시/생성)마다 진행 상태 메시지 표시
+- 에러/성공 시 버튼 상태 자동 복원
+
+### Changed
+- `devcontainer.json`에 `woonyong.jungle-dev-kit` 익스텐션 추가 — 컨테이너 재빌드 시 자동 설치
+- `devcontainer.json`에 `extensions.autoUpdate: true` 설정 추가
+
 ## [0.18.6] - 2025-05-05
 
 ### Fixed
