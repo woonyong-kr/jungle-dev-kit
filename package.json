@@ -175,6 +175,11 @@
       {
         "command": "jungleKit.prevTagGlobal",
         "title": "이전 태그로 이동 (전체)"
+      },
+      {
+        "command": "jungleKit.deleteAnnotationAtCursor",
+        "title": "현재 줄 태그 삭제",
+        "icon": "$(trash)"
       }
     ],
     "keybindings": [

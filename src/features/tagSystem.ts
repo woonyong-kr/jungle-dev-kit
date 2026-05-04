@@ -617,6 +617,30 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		await this.addTag (selected.type);
 	}
 
+	/**
+	 * 현재 커서 위치의 어노테이션 태그를 삭제한다.
+	 * 커서가 어노테이션 주석 줄 위에 있으면 해당 어노테이션을 삭제한다.
+	 */
+	async deleteAnnotationAtCursor (): Promise<void> {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) { return; }
+
+		const doc = editor.document;
+		const cursorLine = editor.selection.active.line;
+		const relativePath = vscode.workspace.asRelativePath (doc.uri);
+
+		const ann = this.annotations.find (
+			(a) => a.file === relativePath && cursorLine >= a.line && cursorLine <= (a.lineEnd ?? a.line)
+		);
+
+		if (!ann) {
+			vscode.window.showInformationMessage ('현재 줄에 어노테이션 태그가 없습니다.');
+			return;
+		}
+
+		await this.deleteAnnotation (ann.id);
+	}
+
 	// ──────────────────────────────────────────
 	// Delete / Edit
 	// ──────────────────────────────────────────
@@ -2074,24 +2098,11 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	// ──────────────────────────────────────────
 
 	private static readonly DEFAULT_SHORTCUTS: ShortcutEntry[] = [
-		// 디버그 단축키
-		{ id: 'debug.start',       label: '디버그 시작',              description: '디버그 세션을 시작합니다',                       command: 'workbench.action.debug.start',      key: 'f5',          mac: 'f5' },
-		{ id: 'debug.stepOver',    label: '디버그 Step Over',         description: '현재 줄을 실행하고 다음 줄로 이동',              command: 'workbench.action.debug.stepOver',   key: 'f6',          mac: 'f6' },
-		{ id: 'debug.stepInto',    label: '디버그 Step Into',         description: '함수 내부로 진입하여 한 줄씩 실행',              command: 'workbench.action.debug.stepInto',   key: 'f7',          mac: 'f7' },
-		{ id: 'debug.continue',    label: '디버그 Continue',          description: '다음 브레이크포인트까지 실행 계속',              command: 'workbench.action.debug.continue',   key: 'f8',          mac: 'f8' },
-		{ id: 'debug.toggleBP',    label: '브레이크포인트 토글',      description: '현재 줄에 브레이크포인트 설정/해제',              command: 'editor.debug.action.toggleBreakpoint', key: 'f11',      mac: 'f11' },
-		// 에디터 네비게이션
-		{ id: 'nav.prevEditor',    label: '이전 에디터 탭',           description: '이전 에디터 탭으로 전환',                        command: 'workbench.action.previousEditor',   key: 'cmd+[',       mac: 'cmd+[' },
-		{ id: 'nav.nextEditor',    label: '다음 에디터 탭',           description: '다음 에디터 탭으로 전환',                        command: 'workbench.action.nextEditor',       key: 'cmd+]',       mac: 'cmd+]' },
-		// 코드 접기/펼치기
-		{ id: 'fold.fold',         label: '코드 접기',                description: '현재 블록을 접어서 숨기기',                      command: 'editor.fold',                       key: 'cmd+shift+[', mac: 'cmd+shift+[' },
-		{ id: 'fold.unfold',       label: '코드 펼치기',              description: '접힌 블록을 다시 펼치기',                        command: 'editor.unfold',                     key: 'cmd+shift+]', mac: 'cmd+shift+]' },
-		// 유틸리티
-		{ id: 'util.selectAll',    label: '전체 선택',                description: '현재 파일의 모든 텍스트 선택',                   command: 'editor.action.selectAll',           key: 'alt+a',       mac: 'alt+a' },
-		{ id: 'util.findRefs',     label: '참조 찾기',                description: '현재 심볼의 모든 참조 위치 검색',                command: 'editor.action.referenceSearch.trigger', key: 'alt+f7',  mac: 'alt+f7' },
 		// 태그 네비게이션 (참조용 — package.json keybinding으로 등록, applyKeybindings에서 스킵)
 		{ id: 'annotation.prevTag',    label: '이전 태그로 이동',     description: '이전 어노테이션 태그로 커서 이동',               command: 'jungleKit.prevTag',                 key: 'alt+[',       mac: 'alt+[' },
 		{ id: 'annotation.nextTag',    label: '다음 태그로 이동',     description: '다음 어노테이션 태그로 커서 이동',               command: 'jungleKit.nextTag',                 key: 'alt+]',       mac: 'alt+]' },
+		// 태그 삭제 (기본 키 미지정 — 사용자가 직접 설정)
+		{ id: 'annotation.deleteTag',  label: '태그 삭제',            description: '현재 줄의 어노테이션 태그를 삭제',               command: 'jungleKit.deleteAnnotationAtCursor', key: '',            mac: '' },
 	];
 
 	private getKeybindingsFilePath (): string {
@@ -2172,10 +2183,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 	private getShortcutWebviewContent (shortcuts: ShortcutEntry[]): string {
 		const groupLabels: Record<string, string> = {
-			debug: '디버그',
-			nav: '에디터 네비게이션',
-			fold: '코드 접기/펼치기',
-			util: '유틸리티',
 			annotation: '어노테이션',
 		};
 
@@ -2455,10 +2462,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 <script>
   const vscode = acquireVsCodeApi();
   const sectionIcons = {
-    debug: '&#x1F41E;',
-    nav: '&#x2194;',
-    fold: '&#x25B6;',
-    util: '&#x2699;',
     annotation: '&#x1F3F7;'
   };
   const groupLabels = ${JSON.stringify (Object.fromEntries (Object.entries (groupLabels)))};
@@ -2473,6 +2476,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
   }
 
   function renderKeyBadge(keyStr) {
+    if (!keyStr) return '<span class="key-part" style="opacity:0.4;">미지정</span>';
     const parts = keyStr.split('+');
     return parts.map((p, i) => {
       const display = p.replace('cmd', '\\u2318').replace('ctrl', 'Ctrl').replace('alt', '\\u2325').replace('shift', '\\u21E7').replace('meta', '\\u2318');
@@ -2482,7 +2486,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
   }
 
   function validateKey(value) {
-    if (!value.trim()) return '단축키를 입력하세요.';
+    if (!value.trim()) return null; // 빈 값 허용 (미지정 상태)
     const parts = value.toLowerCase().split('+');
     const validModifiers = ['ctrl', 'cmd', 'alt', 'shift', 'meta'];
     const validKeys = parts.filter(p => !validModifiers.includes(p));
