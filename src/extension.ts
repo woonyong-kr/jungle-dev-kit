@@ -37,7 +37,7 @@ export async function activate (context: vscode.ExtensionContext) {
 		dragAndDropController: tagSystem,
 		canSelectMany: true,
 	});
-	tagSystem.setTreeView (treeView);
+	tagSystem.setTreeView (treeView, context);
 	context.subscriptions.push (treeView);
 
 	// --- Register commands ---

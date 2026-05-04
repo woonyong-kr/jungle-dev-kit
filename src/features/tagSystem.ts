@@ -136,7 +136,17 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private filterType: AnnotationType | null = null;
 	private filterText: string | null = null;
 	private _regionChildrenMap: Map<string, TagTreeItem[]> = new Map ();
-	private _expandedNodes = new Set<string> ();
+	/** 사용자가 명시적으로 펼치거나 접은 노드 상태 (contextValue → true=expanded, false=collapsed) */
+	private _userExpandState = new Map<string, boolean> ();
+
+	/** 사용자 조작이 있으면 그 상태, 없으면 기본값 반환 */
+	private resolveExpandState (contextValue: string, defaultExpanded: boolean): vscode.TreeItemCollapsibleState {
+		const userState = this._userExpandState.get (contextValue);
+		if (userState !== undefined) {
+			return userState ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed;
+		}
+		return defaultExpanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed;
+	}
 	private _treeView: vscode.TreeView<TagTreeItem> | null = null;
 	private _onDidChangeTreeData = new vscode.EventEmitter<TagTreeItem | undefined> ();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -146,16 +156,18 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		this.apiKeys = apiKeys || null;
 	}
 
-	setTreeView (treeView: vscode.TreeView<TagTreeItem>): void {
+	setTreeView (treeView: vscode.TreeView<TagTreeItem>, context: vscode.ExtensionContext): void {
 		this._treeView = treeView;
-		treeView.onDidExpandElement ((e) => {
-			const cv = e.element.contextValue;
-			if (cv) { this._expandedNodes.add (cv); }
-		});
-		treeView.onDidCollapseElement ((e) => {
-			const cv = e.element.contextValue;
-			if (cv) { this._expandedNodes.delete (cv); }
-		});
+		context.subscriptions.push (
+			treeView.onDidExpandElement ((e) => {
+				const cv = e.element.contextValue;
+				if (cv) { this._userExpandState.set (cv, true); }
+			}),
+			treeView.onDidCollapseElement ((e) => {
+				const cv = e.element.contextValue;
+				if (cv) { this._userExpandState.set (cv, false); }
+			})
+		);
 	}
 
 	async activate (context: vscode.ExtensionContext): Promise<void> {
@@ -678,13 +690,22 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					// 해당 줄이 실제로 annotation 주석인지 확인
 					if (lineText.match (SINGLE_LINE_RE) || lineText.match (BLOCK_SINGLE_RE) || lineText.match (BLOCK_START_RE)) {
 						const edit = new vscode.WorkspaceEdit ();
-						const endLine = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount);
-						edit.delete (uri, new vscode.Range (ann.line, 0, endLine, 0));
+						const deletedLines = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount) - ann.line;
+						edit.delete (uri, new vscode.Range (ann.line, 0, ann.line + deletedLines, 0));
 						await vscode.workspace.applyEdit (edit);
+
+						// 같은 파일의 나머지 어노테이션 줄 번호를 직접 조정 (재스캔 없이)
+						for (const other of this.annotations) {
+							if (other.id === id || other.file !== ann.file) { continue; }
+							if (other.line > ann.line) {
+								other.line = Math.max (0, other.line - deletedLines);
+								if (other.lineEnd !== undefined) {
+									other.lineEnd = Math.max (0, other.lineEnd - deletedLines);
+								}
+							}
+						}
 					}
 				}
-				// edit 후 즉시 재스캔 — 나머지 annotation 줄 번호 갱신
-				this.scanDocument (doc);
 			} catch { /* ignore */ }
 		}
 
@@ -1155,15 +1176,13 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			const count = active.filter ((a) => a.type === type).length;
 			if (count === 0) { continue; }
 
-			const item = new TagTreeItem (
-				`@${type}`,
-				vscode.TreeItemCollapsibleState.Expanded
-			);
+			const contextValue = `tagGroup-${type}`;
+			const item = new TagTreeItem (`@${type}`, this.resolveExpandState (contextValue, true));
 			item.description = `(${count})`;
 			item.iconPath = vscode.Uri.joinPath (
 				this.context.extensionUri, 'resources', 'icons', `${type}.svg`
 			);
-			item.contextValue = `tagGroup-${type}`;
+			item.contextValue = contextValue;
 			items.push (item);
 		}
 		return items;
@@ -1180,15 +1199,13 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		const items: TagTreeItem[] = [];
 		for (const [file, anns] of fileGroups) {
-			const item = new TagTreeItem (
-				path.basename (file),
-				vscode.TreeItemCollapsibleState.Expanded
-			);
+			const contextValue = `tagFile-${file}`;
+			const item = new TagTreeItem (path.basename (file), this.resolveExpandState (contextValue, true));
 			const dir = path.dirname (file) !== '.' ? path.dirname (file) + ' ' : '';
 			item.description = `${dir}(${anns.length})`;
 			item.resourceUri = vscode.Uri.parse (`jungle-tag:///${file}`);
 			item.iconPath = vscode.ThemeIcon.File;
-			item.contextValue = `tagFile-${file}`;
+			item.contextValue = contextValue;
 			items.push (item);
 		}
 		return items;
@@ -1217,10 +1234,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				: `${hash.substring (0, 7)} — ${items[0]?.author || 'unknown'} (${items.length})`;
 
 			const contextValue = `tagCommit-${hash}`;
-			const state = this._expandedNodes.has (contextValue)
-				? vscode.TreeItemCollapsibleState.Expanded
-				: vscode.TreeItemCollapsibleState.Collapsed;
-			const item = new TagTreeItem (label, state);
+			const item = new TagTreeItem (label, this.resolveExpandState (contextValue, false));
 			item.iconPath = new vscode.ThemeIcon ('git-commit');
 			item.contextValue = contextValue;
 			return item;
@@ -1420,7 +1434,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			for (let i = startLine; i < Math.min (startLine + 10, fileLines.length); i++) {
 				const trimmed = fileLines[i]?.trim () ?? '';
 				if (trimmed === '' || trimmed.startsWith ('/*') || trimmed.startsWith ('//') ||
-					trimmed.startsWith ('*') || trimmed === '*/') {
+					trimmed === '*/' || /^\*(\s|$)/.test (trimmed)) {
 					continue;
 				}
 				bpLine = i;
@@ -1520,17 +1534,24 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		);
 
 		let headCheckTimer: NodeJS.Timeout | null = null;
+		let reviewInProgress = false;
 
 		const checkHead = async () => {
 			headCheckTimer = null;
+			if (reviewInProgress) { return; }
+			reviewInProgress = true;
 			const currentHead = await this.getCurrentCommitHash ();
 			if (!currentHead || currentHead === this._lastKnownHead) { return; }
 
 			const oldHead = this._lastKnownHead;
 			this._lastKnownHead = currentHead;
 
-			if (oldHead) {
-				await this.generateReviewsForDiff (oldHead, currentHead);
+			try {
+				if (oldHead) {
+					await this.generateReviewsForDiff (oldHead, currentHead);
+				}
+			} finally {
+				reviewInProgress = false;
 			}
 		};
 
