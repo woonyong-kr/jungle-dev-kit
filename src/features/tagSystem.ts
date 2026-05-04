@@ -136,12 +136,26 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private filterType: AnnotationType | null = null;
 	private filterText: string | null = null;
 	private _regionChildrenMap: Map<string, TagTreeItem[]> = new Map ();
-	private _onDidChangeTreeData = new vscode.EventEmitter<void> ();
+	private _expandedNodes = new Set<string> ();
+	private _treeView: vscode.TreeView<TagTreeItem> | null = null;
+	private _onDidChangeTreeData = new vscode.EventEmitter<TagTreeItem | undefined> ();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
 	constructor (config: ConfigManager, apiKeys?: APIKeyManager) {
 		this.config = config;
 		this.apiKeys = apiKeys || null;
+	}
+
+	setTreeView (treeView: vscode.TreeView<TagTreeItem>): void {
+		this._treeView = treeView;
+		treeView.onDidExpandElement ((e) => {
+			const cv = e.element.contextValue;
+			if (cv) { this._expandedNodes.add (cv); }
+		});
+		treeView.onDidCollapseElement ((e) => {
+			const cv = e.element.contextValue;
+			if (cv) { this._expandedNodes.delete (cv); }
+		});
 	}
 
 	async activate (context: vscode.ExtensionContext): Promise<void> {
@@ -166,7 +180,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		// 현재 열린 파일 스캔 & 데코레이션
 		this.scanVisibleEditors ();
-		this._onDidChangeTreeData.fire ();
+		this._onDidChangeTreeData.fire (undefined);
 
 		// 워크스페이스 전체에서 모든 어노테이션 스캔 (열려있지 않은 파일 포함)
 		await this.scanWorkspaceAnnotations ();
@@ -266,7 +280,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 							(e) => e.document.uri.toString () === event.document.uri.toString ()
 						)
 					);
-					this._onDidChangeTreeData.fire ();
+					this._onDidChangeTreeData.fire (undefined);
 				}, SCAN_DEBOUNCE_MS);
 			}),
 			// 에디터 전환 시 데코레이션 적용
@@ -274,7 +288,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				if (editor) {
 					this.scanDocument (editor.document);
 					this.updateEditorDecorations (editor);
-					this._onDidChangeTreeData.fire ();
+					this._onDidChangeTreeData.fire (undefined);
 				}
 			}),
 			// 파일 저장 시 스캔
@@ -282,7 +296,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				this.scanDocument (doc);
 				this.updateAllDecorations ();
 				this.syncBreakpoints ();
-				this._onDidChangeTreeData.fire ();
+				this._onDidChangeTreeData.fire (undefined);
 			})
 		);
 	}
@@ -677,7 +691,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		this.annotations = this.annotations.filter ((a) => a.id !== id);
 		this.saveAnnotations ();
 		this.updateAllDecorations ();
-		this._onDidChangeTreeData.fire ();
+		this._onDidChangeTreeData.fire (undefined);
 	}
 
 	async editAnnotation (id: string): Promise<void> {
@@ -693,7 +707,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		ann.displayLabel = newLabel || null;
 		this.saveAnnotations ();
-		this._onDidChangeTreeData.fire ();
+		this._onDidChangeTreeData.fire (undefined);
 	}
 
 	async clearAllAnnotations (): Promise<void> {
@@ -706,23 +720,33 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		);
 		if (confirm !== '삭제') { return; }
 
+		// 디바운스된 스캔 타이머 취소 — 삭제 직후 재스캔으로 복원되는 것 방지
+		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
+
 		// 파일에서 주석 줄 삭제
 		await this.removeAnnotationLinesFromFiles (this.annotations);
+
+		// 편집으로 인해 재스케줄된 스캔 타이머도 취소
+		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 
 		this.annotations = [];
 		this.saveAnnotations ();
 		this.updateAllDecorations ();
-		this._onDidChangeTreeData.fire ();
+		this._onDidChangeTreeData.fire (undefined);
 	}
 
 	async clearFileAnnotations (file: string): Promise<void> {
+		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
+
 		const fileAnns = this.annotations.filter ((a) => a.file === file);
 		await this.removeAnnotationLinesFromFiles (fileAnns);
+
+		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 
 		this.annotations = this.annotations.filter ((a) => a.file !== file);
 		this.saveAnnotations ();
 		this.updateAllDecorations ();
-		this._onDidChangeTreeData.fire ();
+		this._onDidChangeTreeData.fire (undefined);
 	}
 
 	private async removeAnnotationLinesFromFiles (anns: Annotation[]): Promise<void> {
@@ -766,12 +790,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	async refresh (): Promise<void> {
 		this.scanVisibleEditors ();
 		await this.scanWorkspaceAnnotations (true);
-		this._onDidChangeTreeData.fire ();
+		this._onDidChangeTreeData.fire (undefined);
 	}
 
 	toggleView (): void {
 		this._groupByFile = !this._groupByFile;
-		this._onDidChangeTreeData.fire ();
+		this._onDidChangeTreeData.fire (undefined);
 	}
 
 	async searchTags (): Promise<void> {
@@ -798,7 +822,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			this.filterText = null;
 		}
 
-		this._onDidChangeTreeData.fire ();
+		this._onDidChangeTreeData.fire (undefined);
 	}
 
 	// ──────────────────────────────────────────
@@ -1039,7 +1063,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 
 		this.saveAnnotations ();
-		this._onDidChangeTreeData.fire ();
+		this._onDidChangeTreeData.fire (undefined);
 	}
 
 	getTreeItem (element: TagTreeItem): vscode.TreeItem {
@@ -1192,9 +1216,13 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				? `uncommitted (${items.length})`
 				: `${hash.substring (0, 7)} — ${items[0]?.author || 'unknown'} (${items.length})`;
 
-			const item = new TagTreeItem (label, vscode.TreeItemCollapsibleState.Collapsed);
+			const contextValue = `tagCommit-${hash}`;
+			const state = this._expandedNodes.has (contextValue)
+				? vscode.TreeItemCollapsibleState.Expanded
+				: vscode.TreeItemCollapsibleState.Collapsed;
+			const item = new TagTreeItem (label, state);
 			item.iconPath = new vscode.ThemeIcon ('git-commit');
-			item.contextValue = `tagCommit-${hash}`;
+			item.contextValue = contextValue;
 			return item;
 		});
 	}
@@ -1582,7 +1610,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			if (addedCount > 0) {
 				this.saveAnnotations ();
 				this.updateAllDecorations ();
-				this._onDidChangeTreeData.fire ();
+				this._onDidChangeTreeData.fire (undefined);
 				console.log (
 					`[Annotation] @review ${addedCount}개 자동 생성 (${newHead.substring (0, 7)} — ${commitAuthor})`
 				);
@@ -1717,7 +1745,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					if (addedCount > 0) {
 						this.saveAnnotations ();
 						this.updateAllDecorations ();
-						this._onDidChangeTreeData.fire ();
+						this._onDidChangeTreeData.fire (undefined);
 					}
 
 					const msg = addedCount > 0
@@ -1763,7 +1791,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 							if (rootAdded > 0) {
 								this.saveAnnotations ();
 								this.updateAllDecorations ();
-								this._onDidChangeTreeData.fire ();
+								this._onDidChangeTreeData.fire (undefined);
 							}
 							vscode.window.showInformationMessage (`[Annotation] 최초 커밋: @review ${rootAdded}개 생성`);
 						} catch {
@@ -2033,8 +2061,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			provideFoldingRanges (doc: vscode.TextDocument): vscode.FoldingRange[] {
 				const ranges: vscode.FoldingRange[] = [];
 				const stack: { line: number; name: string }[] = [];
-				const regionEnd = /@endregion\b/;
-				const regionStart = /@region\b/;
+				// 주석 내부에서만 @region/@endregion 매칭 (// 또는 /* 뒤)
+				const regionEnd = /(?:\/\/|\/\*|#)\s*@endregion\b/;
+				const regionStart = /(?:\/\/|\/\*|#)\s*@region\b/;
 
 				for (let i = 0; i < doc.lineCount; i++) {
 					const text = doc.lineAt (i).text;

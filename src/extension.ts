@@ -32,13 +32,13 @@ export async function activate (context: vscode.ExtensionContext) {
 	const prPanel = new PRPanel (git, apiKeys, config, tagSystem);
 
 	// --- Register tree views ---
-	context.subscriptions.push (
-		vscode.window.createTreeView ('jungleKit.tags', {
-			treeDataProvider: tagSystem,
-			dragAndDropController: tagSystem,
-			canSelectMany: true,
-		})
-	);
+	const treeView = vscode.window.createTreeView ('jungleKit.tags', {
+		treeDataProvider: tagSystem,
+		dragAndDropController: tagSystem,
+		canSelectMany: true,
+	});
+	tagSystem.setTreeView (treeView);
+	context.subscriptions.push (treeView);
 
 	// --- Register commands ---
 	const commands: [string, (...args: any[]) => Promise<void> | void][] = [
