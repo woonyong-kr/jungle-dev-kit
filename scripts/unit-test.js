@@ -154,12 +154,47 @@ function testGdbWarnTrackerClearsPendingSignalOnSessionEnd() {
 	);
 }
 
+function testGdbWarnTrackerIgnoresBreakpointHits() {
+	const tracker = new GdbWarnTracker();
+	const inserted = [];
+	tracker.insertWarn = (file, line, content) => {
+		inserted.push({ file, line, content });
+	};
+
+	tracker.parseLine('Breakpoint 1, main () at ../../threads/init.c:76');
+
+	assert.deepStrictEqual(
+		inserted,
+		[],
+		'user-created breakpoint stops should not be treated as warn-worthy errors'
+	);
+}
+
+function testGdbWarnTrackerStillCapturesSignals() {
+	const tracker = new GdbWarnTracker();
+	const inserted = [];
+	tracker.insertWarn = (file, line, content) => {
+		inserted.push({ file, line, content });
+	};
+
+	tracker.parseLine('Program received signal SIGSEGV, Segmentation fault.');
+	tracker.parseLine('0x00000000004011a3 in func_name () at userprog/process.c:42');
+
+	assert.deepStrictEqual(
+		inserted,
+		[{ file: 'userprog/process.c', line: 42, content: 'func_name() — SIGSEGV' }],
+		'actual crash signals should still produce a warn marker'
+	);
+}
+
 async function main() {
 	await testInitProjectIgnoresAnnotationNotes();
 	await testInitProjectAddsExactGitignoreRuleEvenWithSimilarEntry();
 	await testLoadEnvConfigMergesChecksDeeply();
 	testParseGitHubRemoteDoesNotTreatPlainUsernameAsToken();
 	testGdbWarnTrackerClearsPendingSignalOnSessionEnd();
+	testGdbWarnTrackerIgnoresBreakpointHits();
+	testGdbWarnTrackerStillCapturesSignals();
 	console.log('Unit test passed.');
 }
 

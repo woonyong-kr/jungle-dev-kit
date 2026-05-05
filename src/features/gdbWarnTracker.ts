@@ -4,7 +4,7 @@ import * as path from 'path';
 /**
  * GDB Debug Console Warn Tracker
  *
- * 디버그 콘솔 출력을 감시하여 breakpoint hit, signal, kernel panic 발생 시
+ * 디버그 콘솔 출력을 감시하여 signal, kernel panic, assert failure 발생 시
  * 해당 위치에 @warn 어노테이션을 자동 삽입한다.
  */
 export class GdbWarnTracker {
@@ -43,18 +43,6 @@ export class GdbWarnTracker {
 
 	private parseLine (line: string): void {
 		let match: RegExpMatchArray | null;
-
-		// Pattern 1: Breakpoint hit
-		// "Breakpoint 1, main () at ../../threads/init.c:76"
-		match = line.match (/^Breakpoint\s+(\d+),\s*(.+?)\s+at\s+(.+):(\d+)/);
-		if (match) {
-			const bpNum = match[1];
-			const func = match[2].replace (/\s*\(.*\)/, ''); // 함수명만
-			const file = match[3];
-			const lineNum = parseInt (match[4], 10);
-			this.insertWarn (file, lineNum, `${func}() — Breakpoint ${bpNum} hit`);
-			return;
-		}
 
 		// Pattern 2: Signal received
 		// "Program received signal SIGSEGV, Segmentation fault."
