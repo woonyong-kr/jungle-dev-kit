@@ -1,11 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ConfigManager } from '../utils/configManager';
 
-const execAsync = promisify (exec);
 const execFileAsync = promisify (execFile);
 
 const PINTOS_CLANG_FORMAT = `# PintOS C Coding Style (GNU-based)
@@ -61,11 +60,31 @@ KeepEmptyLinesAtTheStartOfBlocks: false
 export class StyleEnforcer {
 	private config: ConfigManager;
 	private diagnostics: vscode.DiagnosticCollection;
+	private clangFormatBin: string | null = null;
+
 	constructor (config: ConfigManager) {
 		this.config = config;
 		this.diagnostics = vscode.languages.createDiagnosticCollection (
 			'jungleKit-style'
 		);
+	}
+
+	/**
+	 * 번들된 clang-format 바이너리 경로를 반환한다.
+	 * npm 패키지 내장 바이너리 → 시스템 PATH 순으로 탐색.
+	 */
+	private getClangFormatBin (): string {
+		if (this.clangFormatBin) { return this.clangFormatBin; }
+		try {
+			const pkg = require ('clang-format');
+			const bin: string = pkg.getNativeBinary ();
+			this.clangFormatBin = bin;
+			return bin;
+		} catch {
+			// 번들 바이너리를 찾지 못하면 시스템 PATH fallback
+			this.clangFormatBin = 'clang-format';
+			return 'clang-format';
+		}
 	}
 
 	async activate (context: vscode.ExtensionContext): Promise<void> {
@@ -146,20 +165,19 @@ export class StyleEnforcer {
 		if (!root) { return; }
 
 		try {
+			const bin = this.getClangFormatBin ();
 			// execFile로 호출하여 shell injection 방지 (파일명을 인자 배열로 전달)
 			await execFileAsync (
-				'clang-format',
+				bin,
 				['--dry-run', '--Werror', doc.uri.fsPath],
 				{ cwd: root }
 			);
 			// No output = no violations
 			this.diagnostics.set (doc.uri, []);
 		} catch (error: any) {
-			// clang-format 미설치 감지 (ENOENT)
 			if (error.code === 'ENOENT') {
-				vscode.window.showWarningMessage (
-					'[Annotation] clang-format이 설치되어 있지 않습니다. 스타일 검사를 사용하려면 clang-format을 설치하세요.'
-				);
+				// 번들·시스템 모두 없는 경우 — 재시도 방지
+				console.error ('[Annotation] clang-format 바이너리를 찾을 수 없습니다.');
 				return;
 			}
 			const output = error.stderr || error.stdout || '';

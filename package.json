@@ -398,6 +398,7 @@
     "@vscode/vsce": "^2.22.0"
   },
   "dependencies": {
-    "openai": "^4.20.0"
+    "openai": "^4.20.0",
+    "clang-format": "^1.8.0"
   }
 }
