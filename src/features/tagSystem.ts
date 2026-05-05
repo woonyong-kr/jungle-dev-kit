@@ -2072,9 +2072,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 
 			const cleanScript = path.join (scriptsDir, 'clean-local.js');
+			const smudgeScript = path.join (scriptsDir, 'smudge-local.js');
 
-			// Node.js 기반 필터 — macOS/Windows/Linux 모두 동일 동작
-			// bash/sed/awk 호환성 문제 완전 해소
+			// Node.js 기반 clean 필터 — macOS/Windows/Linux 모두 동일 동작
 			// stdin → stdout 파이프로 동작, 어노테이션 태그 주석만 제거
 			const nodeScript = `#!/usr/bin/env node
 'use strict';
@@ -2106,12 +2106,80 @@ process.stdin.on('end', () => {
 `;
 			fs.writeFileSync (cleanScript, nodeScript, { mode: 0o755 });
 
+			// Node.js 기반 smudge 필터 — annotations.json에서 태그 복원
+			// %f로 파일 경로를 받아 해당 파일의 어노테이션을 삽입
+			// 안전장치: JSON 파싱 실패, 파일 없음, 이미 태그 존재 시 원본 그대로 통과
+			// NOTE: 이스케이핑 문제를 방지하기 위해 배열 join으로 스크립트를 생성
+			const smudgeLines = [
+				'#!/usr/bin/env node',
+				"'use strict';",
+				"const fs = require('fs');",
+				"const path = require('path');",
+				'',
+				"const filePath = process.argv[2] || '';",
+				"let buf = '';",
+				"process.stdin.setEncoding('utf8');",
+				"process.stdin.on('data', c => { buf += c; });",
+				"process.stdin.on('end', () => {",
+				'  if (!filePath) { process.stdout.write(buf); return; }',
+				'  try {',
+				"    const jsonPath = path.join('.annotation', 'annotations.json');",
+				'    if (!fs.existsSync(jsonPath)) { process.stdout.write(buf); return; }',
+				"    const raw = fs.readFileSync(jsonPath, 'utf-8');",
+				'    const data = JSON.parse(raw);',
+				'    if (!data || !Array.isArray(data.annotations)) { process.stdout.write(buf); return; }',
+				'',
+				"    const normalizedPath = filePath.replace(/\\\\\\\\/g, '/');",
+				'    const fileAnnotations = data.annotations.filter(a =>',
+				"      a.file && a.file.replace(/\\\\\\\\/g, '/') === normalizedPath && !a.virtual",
+				'    );',
+				'    if (fileAnnotations.length === 0) { process.stdout.write(buf); return; }',
+				'',
+				"    const lines = buf.split('\\n');",
+				'',
+				'    // 이중 삽입 방지',
+				"    const tags = ['todo','bookmark','review','warn','breakpoint','note','region','endregion'];",
+				"    const tagRe = new RegExp('\\\\s*(\\\\/\\\\/|/\\\\*)\\\\s*@(' + tags.join('|') + ')(\\\\s|\\\\*|$)');",
+				'    if (lines.some(l => tagRe.test(l))) { process.stdout.write(buf); return; }',
+				'',
+				'    const sorted = fileAnnotations',
+				"      .filter(a => typeof a.line === 'number' && a.line >= 0)",
+				'      .sort((a, b) => a.line - b.line);',
+				'',
+				'    for (const ann of sorted) {',
+				'      const insertAt = ann.line;',
+				'      if (insertAt > lines.length) { continue; }',
+				'      const refIdx = Math.min(insertAt, lines.length - 1);',
+				"      const indent = (lines[refIdx] || '').match(/^(\\s*)/)[1];",
+				"      const safe = (ann.content || '').replace(/\\*\\//g, '* /');",
+				"      const type = ann.type || 'todo';",
+				'      let cls = [];',
+				'      if (ann.lineEnd !== undefined && ann.lineEnd > ann.line) {',
+				'        const total = ann.lineEnd - ann.line + 1;',
+				"        cls.push(indent + '/* @' + type + ' ' + safe);",
+				"        for (let k = 0; k < total - 2; k++) { cls.push(indent + '   '); }",
+				"        cls.push(indent + '*/');",
+				'      } else {',
+				"        cls.push(indent + '/* @' + type + ' ' + (safe && safe !== type ? safe + ' ' : '') + '*/');",
+				'      }',
+				'      if (insertAt >= 0 && insertAt <= lines.length) {',
+				'        lines.splice(insertAt, 0, ...cls);',
+				'      }',
+				'    }',
+				"    process.stdout.write(lines.join('\\n'));",
+				'  } catch (e) {',
+				'    process.stdout.write(buf);',
+				'  }',
+				'});',
+			];
+			fs.writeFileSync (smudgeScript, smudgeLines.join ('\n'), { mode: 0o755 });
+
 			const filterName = 'annotation-local';
 
 			// Node.js 실행 경로: VS Code가 보장하는 node를 사용
 			// Windows에서도 node는 PATH에 있음 (VS Code/git 환경)
 			const cleanCmd = `node "${cleanScript.replace (/\\/g, '/')}"`;
-			const smudgeCmd = 'cat';
+			const smudgeCmd = `node "${smudgeScript.replace (/\\/g, '/')}" %f`;
 
 			const { execFile: execFileCb } = require ('child_process');
 			const execFileP = promisify (execFileCb);

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.24.2] - 2026-05-05
+
+### Fixed
+- **tagSystem**: smudge filter 구현 — `git checkout`/`git pull` 시 `annotations.json` 기반으로 어노테이션 주석 자동 복원
+  - 이중 삽입 방지 (이미 태그 존재 시 스킵)
+  - JSON 파싱 실패, 파일 미존재 시 원본 그대로 통과 (안전 우선)
+  - 배열 join 방식으로 이스케이핑 문제 완전 해소
+
 ## [0.24.0] - 2026-05-05
 
 ### Added
