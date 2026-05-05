@@ -107,7 +107,7 @@ export class ConfigManager {
 			}
 
 			// Add notes to .gitignore (local-only)
-			await this.ensureGitignoreEntry ('notes/');
+			await this.ensureGitignoreEntry ('.annotation/notes/');
 
 			console.log ('[Annotation] initialized: .annotation/ created');
 		} catch (err: any) {
@@ -115,13 +115,20 @@ export class ConfigManager {
 		}
 	}
 
-loadEnvConfig (): EnvConfig {
+	loadEnvConfig (): EnvConfig {
 		const configPath = path.join (this.getConfigDir (), 'config.json');
 		if (fs.existsSync (configPath)) {
 			try {
 				const raw = fs.readFileSync (configPath, 'utf-8');
 				const config = JSON.parse (raw) as JungleKitConfig;
-				return { ...DEFAULT_ENV, ...config.env };
+				return {
+					...DEFAULT_ENV,
+					...config.env,
+					checks: {
+						...DEFAULT_ENV.checks,
+						...(config.env?.checks ?? {}),
+					},
+				};
 			} catch {
 				return DEFAULT_ENV;
 			}

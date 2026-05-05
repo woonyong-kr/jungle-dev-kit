@@ -103,7 +103,7 @@ export class GitHubPrClient {
 
 				const username = decodeURIComponent (parsed.username || '');
 				const password = decodeURIComponent (parsed.password || '');
-				const remoteToken = password || username || null;
+				const remoteToken = GitHubPrClient.extractEmbeddedToken (username, password);
 
 				return {
 					owner: pathParts[0],
@@ -123,6 +123,12 @@ export class GitHubPrClient {
 		} catch {
 			return null;
 		}
+	}
+
+	private static extractEmbeddedToken (username: string, password: string): string | null {
+		if (password) { return password; }
+		if (/^(gh[pousr]_|github_pat_)/.test (username)) { return username; }
+		return null;
 	}
 
 	private static async getGitCredentialToken (root: string): Promise<string | null> {

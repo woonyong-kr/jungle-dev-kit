@@ -413,7 +413,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "test": "npm run compile && node ./scripts/smoke-test.js",
+    "test": "npm run compile && node ./scripts/smoke-test.js && node ./scripts/unit-test.js",
     "package": "vsce package",
     "publish": "vsce publish"
   },

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { StyleEnforcer } from './features/styleEnforcer';
 // LocalComments removed — @note handled by annotation system
 import { EnvironmentValidator } from './features/environmentValidator';
@@ -91,7 +92,7 @@ export async function activate (context: vscode.ExtensionContext) {
 			const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 			if (!root) {return;}
 			try {
-				const uri = vscode.Uri.file (`${root}/${tag.file}`);
+				const uri = vscode.Uri.file (path.join (root, tag.file));
 				const doc = await vscode.workspace.openTextDocument (uri);
 				const editor = await vscode.window.showTextDocument (doc);
 				const pos = new vscode.Position (tag.line, 0);
