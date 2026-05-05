@@ -97,11 +97,13 @@ export class StyleEnforcer {
 		const vscodeSetting = vscode.workspace.getConfiguration ('jungleKit');
 
 		if (vscodeSetting.get<boolean> ('style.autoCreateClangFormat', true)) {
-			try {
-				fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
-				console.log ('[Annotation] .clang-format 적용 (워크스페이스 루트)');
-			} catch (err) {
-				console.warn ('[Annotation] .clang-format 쓰기 실패 (읽기 전용 파일시스템?):', err);
+			if (!fs.existsSync (clangFormatPath)) {
+				try {
+					fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
+					console.log ('[Annotation] .clang-format 생성 (워크스페이스 루트)');
+				} catch (err) {
+					console.warn ('[Annotation] .clang-format 쓰기 실패 (읽기 전용 파일시스템?):', err);
+				}
 			}
 		}
 
