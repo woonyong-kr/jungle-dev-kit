@@ -276,7 +276,7 @@ ${commitsSummary}
 ${reviewSummary}
 
 === Diff ===
-${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
+${this.truncateDiffSmart (diff || '', PR_DIFF_TRUNCATE_LIMIT)}`,
 					},
 				],
 			});
@@ -296,6 +296,36 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 				text: `AI 생성 실패: ${err.message}`,
 			});
 		}
+	}
+
+	/** diff를 파일 단위로 분할하여 한도 내에서 균등 배분 */
+	private truncateDiffSmart (diff: string, limit: number): string {
+		if (diff.length <= limit) { return diff; }
+
+		// "diff --git" 기준으로 파일별 분할
+		const chunks = diff.split (/(?=^diff --git )/m);
+		if (chunks.length <= 1) { return diff.substring (0, limit); }
+
+		const result: string[] = [];
+		let remaining = limit;
+
+		for (const chunk of chunks) {
+			if (remaining <= 0) { break; }
+			if (chunk.length <= remaining) {
+				result.push (chunk);
+				remaining -= chunk.length;
+			} else {
+				// 파일 헤더(처음 5줄)는 보존하고 나머지를 잘라냄
+				const lines = chunk.split ('\n');
+				const header = lines.slice (0, 5).join ('\n');
+				const body = lines.slice (5).join ('\n');
+				const allowed = Math.max (remaining - header.length - 30, 0);
+				result.push (header + '\n' + body.substring (0, allowed) + '\n... (truncated)');
+				remaining = 0;
+			}
+		}
+
+		return result.join ('');
 	}
 
 	private async handleCreatePR (

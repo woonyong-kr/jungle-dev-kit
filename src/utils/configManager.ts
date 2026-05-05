@@ -9,7 +9,7 @@ export const DIFF_FILE_EXTENSIONS = "'*.c' '*.h'";
 export const AI_DIFF_TRUNCATE_LIMIT = 4000;
 
 /** PR diff 절삭 한도 (bytes) */
-export const PR_DIFF_TRUNCATE_LIMIT = 6000;
+export const PR_DIFF_TRUNCATE_LIMIT = 80000;
 
 export interface JungleKitConfig {
 	convention: ConventionConfig;

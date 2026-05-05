@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.4] - 2026-05-05
+
+### Fixed
+- **prPanel**: AI PR 생성 시 diff 절삭 한도를 6KB → 80KB로 증가하여 대규모 변경도 정확히 분석
+- **prPanel**: 파일별 균등 분배 절삭(`truncateDiffSmart`) 도입 — 첫 번째 파일만 보내던 문제 해결
+- **tagSystem**: smudge filter Windows 경로 정규화 regex 수정 (이중 백슬래시 → 단일 백슬래시 매칭)
+
 ## [0.24.2] - 2026-05-05
 
 ### Fixed
