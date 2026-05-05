@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.1] - 2026-05-05
+
+### Fixed
+- **prPanel**: "Webview is disposed" 크래시 수정 — 비동기 git 작업 중 패널 닫힘 감지 (`this._panel` null 체크)
+- **prPanel**: Description 템플릿 및 Review Tags에서 이모지 제거
+- **prPanel**: `checkExistingPR`에서 패널 disposed 상태 체크 추가
+
 ## [0.22.0] - 2026-05-05
 
 ### Fixed

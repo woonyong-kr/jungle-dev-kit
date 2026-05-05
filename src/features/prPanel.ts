@@ -68,6 +68,7 @@ export class PRPanel {
 		try {
 		// Gather data
 		const currentBranch = await this.git.getCurrentBranch ();
+		if (!this._panel) { return; } // 비동기 중 패널 닫힘 방어
 		if (!currentBranch) {
 			vscode.window.showErrorMessage ('detached HEAD 상태에서는 PR을 생성할 수 없습니다.');
 			panel.dispose ();
@@ -76,7 +77,9 @@ export class PRPanel {
 
 		// 로컬 + 리모트 브랜치에서 현재 브랜치를 제외
 		const localBranches = await this.git.getLocalBranches ();
+		if (!this._panel) { return; }
 		const allBranches = await this.git.getAllBranches ();
+		if (!this._panel) { return; }
 		// 리모트 브랜치에서 "origin/" 접두어를 제거하고, HEAD 포인터 제외
 		const remoteBranches = allBranches
 			.filter ((b) => b.startsWith ('origin/') && !b.includes ('HEAD'))
@@ -94,8 +97,11 @@ export class PRPanel {
 		const defaultBase = this.guessDefaultBase (baseBranches);
 
 		const diff = await this.git.getStagedDiff () || await this.git.getDiffAgainst (defaultBase);
+		if (!this._panel) { return; }
 		const changedFiles = await this.git.getChangedFiles (defaultBase);
+		if (!this._panel) { return; }
 		const commits = await this.git.getRecentCommits (currentBranch, 10);
+		if (!this._panel) { return; }
 		const reviewTags = this.tagSystem.getReviewTags ();
 
 		panel.webview.html = this.getWebviewContent (
@@ -162,11 +168,14 @@ export class PRPanel {
 		if (!root) { return; }
 		try {
 			await execAsync ('gh --version', { cwd: root });
+			if (!this._panel) { return; }
 			await execAsync ('gh auth status', { cwd: root });
+			if (!this._panel) { return; }
 			const { stdout } = await execAsync (
 				'gh pr view --json url,title,state',
 				{ cwd: root, timeout: 10000 }
 			);
+			if (!this._panel) { return; }
 			const pr = JSON.parse (stdout.trim ());
 			if (pr.state === 'OPEN' && pr.url) {
 				panel.webview.postMessage ({
@@ -823,7 +832,7 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 		<!-- Body -->
 		<div class="form-group">
 			<label class="form-label">Description</label>
-			<textarea id="body" placeholder="## 변경 개요&#10;&#10;## 주요 변경&#10;- [파일] 함수 — 변경 내용&#10;&#10;## 배경&#10;&#10;## 리뷰 포인트&#10;- ⚠️ 파일:라인 — 이슈&#10;&#10;## 검증"></textarea>
+			<textarea id="body" placeholder="## 변경 개요&#10;&#10;## 주요 변경&#10;- [파일] 함수 -- 변경 내용&#10;&#10;## 배경&#10;&#10;## 리뷰 포인트&#10;- 파일:라인 -- 이슈&#10;&#10;## 검증"></textarea>
 		</div>
 
 		<div class="divider"></div>
@@ -884,7 +893,7 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 				<div class="section-body">
 					${reviewTags.map ((t) =>
 						'<div class="review-item">'
-						+ '<span class="review-marker">&#9888;&#65039;</span>'
+						+ '<span class="review-marker" style="color:var(--vscode-editorWarning-foreground,#cca700);font-weight:bold;">!</span>'
 						+ '<span class="review-loc">' + escapeHtml (t.file) + ':' + (t.line + 1) + '</span>'
 						+ '<span class="review-content">' + escapeHtml (t.content) + '</span>'
 						+ '</div>'
@@ -1025,7 +1034,7 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 				case 'existingPR': {
 					const prHtml = '<a href="' + esc(msg.url) + '" target="_blank">' + esc(msg.title || msg.url) + '</a>';
 					area.innerHTML = '<div class="message success" style="margin:12px 24px;">'
-						+ '<span class="msg-icon">&#128279;</span> '
+						+ '<span class="msg-icon">[PR]</span> '
 						+ '이 브랜치에 이미 열린 PR이 있습니다: ' + prHtml
 						+ '<br><small style="opacity:0.7;">새 커밋을 push하면 PR이 자동 업데이트됩니다. 새 PR을 만들려면 기존 PR을 먼저 닫으세요.</small>'
 						+ '</div>';
