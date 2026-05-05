@@ -98,7 +98,11 @@ export class GitHubPrClient {
 			if (remoteUrl.startsWith ('http://') || remoteUrl.startsWith ('https://')) {
 				const parsed = new URL (remoteUrl);
 				if (parsed.hostname !== 'github.com') { return null; }
-				const pathParts = parsed.pathname.replace (/^\//, '').replace (/\.git$/, '').split ('/');
+				const normalizedPath = parsed.pathname
+					.replace (/\/+$/, '')
+					.replace (/^\//, '')
+					.replace (/\.git$/, '');
+				const pathParts = normalizedPath.split ('/');
 				if (pathParts.length < 2) { return null; }
 
 				const username = decodeURIComponent (parsed.username || '');

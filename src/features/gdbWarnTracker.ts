@@ -21,6 +21,7 @@ export class GdbWarnTracker {
 		context.subscriptions.push (
 			vscode.debug.onDidTerminateDebugSession (() => {
 				this._insertedLocations.clear ();
+				this._pendingSignal = null;
 			})
 		);
 	}

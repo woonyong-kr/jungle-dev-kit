@@ -12,6 +12,14 @@ const vscodeStub = {
 		showErrorMessage: () => undefined,
 		showInformationMessage: () => undefined,
 	},
+	debug: {
+		registerDebugAdapterTrackerFactory: () => ({ dispose() {} }),
+		onDidTerminateDebugSession: (callback) => {
+			vscodeStub.__onTerminateDebugSession = callback;
+			return { dispose() {} };
+		},
+	},
+	__onTerminateDebugSession: null,
 };
 
 const originalLoad = Module._load;
@@ -24,6 +32,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
 
 const { ConfigManager } = require('../out/utils/configManager.js');
 const { GitHubPrClient } = require('../out/utils/githubPrClient.js');
+const { GdbWarnTracker } = require('../out/features/gdbWarnTracker.js');
 
 async function withTempWorkspace(run) {
 	const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jungle-dev-kit-'));
@@ -51,6 +60,22 @@ async function testInitProjectIgnoresAnnotationNotes() {
 		assert(
 			!gitignore.includes('\nnotes/\n'),
 			'initProject should not add a bare notes/ rule that targets the wrong directory'
+		);
+	});
+}
+
+async function testInitProjectAddsExactGitignoreRuleEvenWithSimilarEntry() {
+	await withTempWorkspace(async (workspaceRoot) => {
+		fs.writeFileSync(path.join(workspaceRoot, '.gitignore'), '.annotation/notes-archive/\n');
+		const manager = new ConfigManager({ extensionPath: workspaceRoot });
+		await manager.initProject();
+
+		const gitignore = fs.readFileSync(path.join(workspaceRoot, '.gitignore'), 'utf8');
+		const lines = gitignore.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+
+		assert(
+			lines.includes('.annotation/notes/'),
+			'initProject should add the exact .annotation/notes/ rule even when a similar rule already exists'
 		);
 	});
 }
@@ -97,12 +122,44 @@ function testParseGitHubRemoteDoesNotTreatPlainUsernameAsToken() {
 		'ghp_exampleToken',
 		'parseGitHubRemote should keep embedded PAT-style credentials'
 	);
+
+	const trailingSlashRemote = GitHubPrClient.parseGitHubRemote('https://github.com/owner/repo.git/');
+	assert(trailingSlashRemote, 'parseGitHubRemote should parse remotes with a trailing slash');
+	assert.strictEqual(
+		trailingSlashRemote.repo,
+		'repo',
+		'parseGitHubRemote should normalize trailing slashes instead of keeping .git in the repo name'
+	);
+}
+
+function testGdbWarnTrackerClearsPendingSignalOnSessionEnd() {
+	vscodeStub.__onTerminateDebugSession = null;
+	const tracker = new GdbWarnTracker();
+	const inserted = [];
+	tracker.insertWarn = (file, line, content) => {
+		inserted.push({ file, line, content });
+	};
+
+	tracker.activate({ subscriptions: [] });
+	tracker.parseLine('Program received signal SIGSEGV, Segmentation fault.');
+	assert(vscodeStub.__onTerminateDebugSession, 'activate should register a debug-session termination handler');
+
+	vscodeStub.__onTerminateDebugSession();
+	tracker.parseLine('func_name () at file.c:42');
+
+	assert.deepStrictEqual(
+		inserted,
+		[],
+		'pending signals from a previous debug session should not leak into the next session'
+	);
 }
 
 async function main() {
 	await testInitProjectIgnoresAnnotationNotes();
+	await testInitProjectAddsExactGitignoreRuleEvenWithSimilarEntry();
 	await testLoadEnvConfigMergesChecksDeeply();
 	testParseGitHubRemoteDoesNotTreatPlainUsernameAsToken();
+	testGdbWarnTrackerClearsPendingSignalOnSessionEnd();
 	console.log('Unit test passed.');
 }
 
