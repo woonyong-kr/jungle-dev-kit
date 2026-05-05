@@ -832,7 +832,7 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 		<!-- Body -->
 		<div class="form-group">
 			<label class="form-label">Description</label>
-			<textarea id="body" placeholder="## 변경 개요&#10;&#10;## 주요 변경&#10;- [파일] 함수 -- 변경 내용&#10;&#10;## 배경&#10;&#10;## 리뷰 포인트&#10;- 파일:라인 -- 이슈&#10;&#10;## 검증"></textarea>
+			<textarea id="body" placeholder="## 변경 개요&#10;핵심 변경과 목표 1~2문장 요약&#10;&#10;## 주요 변경&#10;- [파일명] 함수/구조체 -- 무엇을 왜 어떻게 변경했는지 서술&#10;&#10;## 설계 고려사항&#10;- 검토한 대안, 트레이드오프 서술&#10;&#10;## 리뷰 포인트&#10;- [주의] 파일:라인 -- 잠재적 이슈&#10;&#10;## 검증&#10;- 테스트 방법 및 결과"></textarea>
 		</div>
 
 		<div class="divider"></div>
