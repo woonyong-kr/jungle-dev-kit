@@ -33,6 +33,11 @@ Module._load = function patchedLoad(request, parent, isMain) {
 const { ConfigManager } = require('../out/utils/configManager.js');
 const { GitHubPrClient } = require('../out/utils/githubPrClient.js');
 const { GdbWarnTracker } = require('../out/features/gdbWarnTracker.js');
+const {
+	parseWorkingTreeDiffHunks,
+	mapHeadLineToWorkingTree,
+	mapHeadRangeToWorkingTree,
+} = require('../out/features/shadowDiff.js');
 
 async function withTempWorkspace(run) {
 	const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'jungle-dev-kit-'));
@@ -187,6 +192,36 @@ function testGdbWarnTrackerStillCapturesSignals() {
 	);
 }
 
+function testShadowDiffMapsHeadLinesAfterDeletionAbove() {
+	const hunks = parseWorkingTreeDiffHunks('@@ -10,1 +10,0 @@\n-/* @warn old */\n');
+
+	assert.deepStrictEqual(
+		hunks,
+		[{ oldStart: 9, oldCount: 1, newStart: 9, newCount: 0 }],
+		'parseWorkingTreeDiffHunks should parse working-tree deletion hunks'
+	);
+	assert.strictEqual(
+		mapHeadLineToWorkingTree(81, hunks),
+		80,
+		'lines after a deleted line should shift upward in the working tree'
+	);
+	assert.deepStrictEqual(
+		mapHeadRangeToWorkingTree(81, 83, hunks),
+		{ startLine: 80, endLine: 82 },
+		'ranges after a deleted line should shift consistently in the working tree'
+	);
+}
+
+function testShadowDiffMapsHeadLinesAfterInsertionAbove() {
+	const hunks = parseWorkingTreeDiffHunks('@@ -10,0 +10,1 @@\n+/* @warn new */\n');
+
+	assert.strictEqual(
+		mapHeadLineToWorkingTree(81, hunks),
+		82,
+		'lines after an inserted line should shift downward in the working tree'
+	);
+}
+
 async function main() {
 	await testInitProjectIgnoresAnnotationNotes();
 	await testInitProjectAddsExactGitignoreRuleEvenWithSimilarEntry();
@@ -195,6 +230,8 @@ async function main() {
 	testGdbWarnTrackerClearsPendingSignalOnSessionEnd();
 	testGdbWarnTrackerIgnoresBreakpointHits();
 	testGdbWarnTrackerStillCapturesSignals();
+	testShadowDiffMapsHeadLinesAfterDeletionAbove();
+	testShadowDiffMapsHeadLinesAfterInsertionAbove();
 	console.log('Unit test passed.');
 }
 

@@ -32,12 +32,85 @@ interface BranchChange {
 	lastCommitDate: string;
 }
 
+interface WorkingTreeHunk {
+	oldStart: number;
+	oldCount: number;
+	newStart: number;
+	newCount: number;
+}
+
+export function parseWorkingTreeDiffHunks (diff: string): WorkingTreeHunk[] {
+	const hunks: WorkingTreeHunk[] = [];
+
+	for (const line of diff.split ('\n')) {
+		const hunkMatch = line.match (/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+		if (!hunkMatch) { continue; }
+
+		hunks.push ({
+			oldStart: parseInt (hunkMatch[1], 10) - 1,
+			oldCount: parseInt (hunkMatch[2] || '1', 10),
+			newStart: parseInt (hunkMatch[3], 10) - 1,
+			newCount: parseInt (hunkMatch[4] || '1', 10),
+		});
+	}
+
+	return hunks;
+}
+
+export function mapHeadLineToWorkingTree (line: number, hunks: WorkingTreeHunk[]): number {
+	let delta = 0;
+
+	for (const hunk of hunks) {
+		const oldRangeEnd = hunk.oldStart + hunk.oldCount;
+
+		if (hunk.oldCount === 0) {
+			if (line < hunk.oldStart) {
+				return line + delta;
+			}
+			delta += hunk.newCount;
+			continue;
+		}
+
+		if (line < hunk.oldStart) {
+			return line + delta;
+		}
+
+		if (line < oldRangeEnd) {
+			if (hunk.newCount === 0) {
+				return Math.max (0, hunk.newStart);
+			}
+			const relative = line - hunk.oldStart;
+			return hunk.newStart + Math.min (relative, hunk.newCount - 1);
+		}
+
+		delta += hunk.newCount - hunk.oldCount;
+	}
+
+	return line + delta;
+}
+
+export function mapHeadRangeToWorkingTree (
+	startLine: number,
+	endLine: number,
+	hunks: WorkingTreeHunk[]
+): { startLine: number; endLine: number } {
+	const mappedStart = mapHeadLineToWorkingTree (startLine, hunks);
+	const mappedEnd = mapHeadLineToWorkingTree (endLine, hunks);
+
+	return {
+		startLine: Math.max (0, Math.min (mappedStart, mappedEnd)),
+		endLine: Math.max (0, Math.max (mappedStart, mappedEnd)),
+	};
+}
+
 export class ShadowDiff implements vscode.CodeLensProvider {
 	private git: GitUtils;
 	private config: ConfigManager;
 	private context!: vscode.ExtensionContext;
 	private branchChanges: BranchChange[] = [];
 	private fetchInterval: NodeJS.Timeout | undefined;
+	private documentUpdateTimers = new Map<string, NodeJS.Timeout> ();
+	private workingTreeHunksByFile = new Map<string, WorkingTreeHunk[]> ();
 
 	private conflictDecoration!: vscode.TextEditorDecorationType;
 
@@ -74,6 +147,10 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 			dispose: () => {
 				this._disposed = true;
 				if (this.fetchInterval) {clearInterval (this.fetchInterval);}
+				for (const timer of this.documentUpdateTimers.values ()) {
+					clearTimeout (timer);
+				}
+				this.documentUpdateTimers.clear ();
 				if (this._outputChannel) { this._outputChannel.dispose (); }
 			},
 		});
@@ -91,6 +168,15 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 						await this.updateEditorDecorations (editor);
 					}
 				}
+			})
+		);
+		context.subscriptions.push (
+			vscode.workspace.onDidChangeTextDocument ((event) => {
+				const editor = vscode.window.visibleTextEditors.find (
+					(item) => item.document.uri.toString () === event.document.uri.toString ()
+				);
+				if (!editor || !this.isSupportedEditor (editor)) { return; }
+				this.scheduleEditorDecorationUpdate (editor);
 			})
 		);
 	}
@@ -290,11 +376,16 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 
 		const conflictRanges: vscode.DecorationOptions[] = [];
 		// Check which lines in this file are locally modified (working tree + staged)
-		const localModifiedLines = await this.getLocalModifiedLines (relativePath);
+		const [localModifiedLines, workingTreeHunks] = await Promise.all ([
+			this.getLocalModifiedLines (relativePath),
+			this.getWorkingTreeDiffHunks (relativePath),
+		]);
+		this.workingTreeHunksByFile.set (relativePath, workingTreeHunks);
 
 		for (const change of fileChanges) {
 			for (const hunk of change.hunks) {
-				for (let line = hunk.startLine; line <= hunk.endLine && line < editor.document.lineCount; line++) {
+				const mappedRange = mapHeadRangeToWorkingTree (hunk.startLine, hunk.endLine, workingTreeHunks);
+				for (let line = mappedRange.startLine; line <= mappedRange.endLine && line < editor.document.lineCount; line++) {
 					const lineText = editor.document.lineAt (line).text;
 					const hoverContent = new vscode.MarkdownString ();
 					hoverContent.appendMarkdown (
@@ -358,6 +449,38 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 		return lines;
 	}
 
+	private async getWorkingTreeDiffHunks (relativePath: string): Promise<WorkingTreeHunk[]> {
+		const root = this.config.getWorkspaceRoot ();
+		if (!root) { return []; }
+
+		try {
+			const { stdout } = await execFileAsync (
+				'git', ['diff', '-U0', 'HEAD', '--', relativePath],
+				{ cwd: root }
+			);
+			return parseWorkingTreeDiffHunks (stdout);
+		} catch {
+			return [];
+		}
+	}
+
+	private scheduleEditorDecorationUpdate (editor: vscode.TextEditor): void {
+		const key = editor.document.uri.toString ();
+		const existing = this.documentUpdateTimers.get (key);
+		if (existing) {
+			clearTimeout (existing);
+		}
+
+		const timer = setTimeout (() => {
+			this.documentUpdateTimers.delete (key);
+			void this.updateEditorDecorations (editor).then (() => {
+				this._onDidChangeCodeLenses.fire ();
+			});
+		}, 120);
+
+		this.documentUpdateTimers.set (key, timer);
+	}
+
 	// --- CodeLens (conflict warnings above functions) ---
 
 	private registerCodeLens (context: vscode.ExtensionContext): void {
@@ -372,6 +495,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 	provideCodeLenses (document: vscode.TextDocument): vscode.CodeLens[] {
 		const relativePath = vscode.workspace.asRelativePath (document.uri);
 		const fileChanges = this.branchChanges.filter ((c) => c.file === relativePath);
+		const workingTreeHunks = this.workingTreeHunksByFile.get (relativePath) || [];
 
 		if (fileChanges.length === 0) {return [];}
 
@@ -380,13 +504,14 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 
 		for (const change of fileChanges) {
 			for (const hunk of change.hunks) {
+				const mappedRange = mapHeadRangeToWorkingTree (hunk.startLine, hunk.endLine, workingTreeHunks);
 				// Only show CodeLens at the start of each hunk (avoid spam)
-				if (processedLines.has (hunk.startLine)) {continue;}
-				processedLines.add (hunk.startLine);
+				if (processedLines.has (mappedRange.startLine)) {continue;}
+				processedLines.add (mappedRange.startLine);
 
-				if (hunk.startLine >= document.lineCount) {continue;}
+				if (mappedRange.startLine >= document.lineCount) {continue;}
 
-				const range = new vscode.Range (hunk.startLine, 0, hunk.startLine, 0);
+				const range = new vscode.Range (mappedRange.startLine, 0, mappedRange.startLine, 0);
 				lenses.push (new vscode.CodeLens (range, {
 					title: `${change.author} (${change.branch}) -- ${change.lastCommitDate}`,
 					command: 'jungleKit.showShadowDiff',
@@ -434,10 +559,14 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 	): vscode.Hover | undefined {
 		const relativePath = vscode.workspace.asRelativePath (document.uri);
 		const line = position.line;
+		const workingTreeHunks = this.workingTreeHunksByFile.get (relativePath) || [];
 
 		const relevantChanges = this.branchChanges.filter ((c) =>
 			c.file === relativePath &&
-			c.hunks.some ((h) => line >= h.startLine && line <= h.endLine)
+			c.hunks.some ((h) => {
+				const mappedRange = mapHeadRangeToWorkingTree (h.startLine, h.endLine, workingTreeHunks);
+				return line >= mappedRange.startLine && line <= mappedRange.endLine;
+			})
 		);
 
 		if (relevantChanges.length === 0) {return undefined;}
@@ -446,7 +575,10 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 		contents.isTrusted = true;
 
 		for (const change of relevantChanges) {
-			const hunk = change.hunks.find ((h) => line >= h.startLine && line <= h.endLine);
+			const hunk = change.hunks.find ((h) => {
+				const mappedRange = mapHeadRangeToWorkingTree (h.startLine, h.endLine, workingTreeHunks);
+				return line >= mappedRange.startLine && line <= mappedRange.endLine;
+			});
 			if (!hunk) {continue;}
 
 			contents.appendMarkdown (`**${change.author}** \`${change.branch}\` (${change.lastCommitDate})\n\n`);
