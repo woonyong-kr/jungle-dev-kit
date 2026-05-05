@@ -4,6 +4,7 @@ import * as path from 'path';
 import { exec as execCb } from 'child_process';
 import { promisify } from 'util';
 import { ConfigManager, DIFF_FILE_EXTENSIONS } from '../utils/configManager';
+import { reconcileWorkspaceAnnotations } from '../utils/annotationReconciler';
 import { sanitizeRef } from '../utils/gitUtils';
 import { APIKeyManager } from '../utils/apiKeyManager';
 import { GoalTracker } from './goalTracker';
@@ -523,9 +524,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private async scanWorkspaceAnnotations (forceRescan = false): Promise<void> {
 		const files = await vscode.workspace.findFiles (WORKSPACE_SCAN_GLOB, WORKSPACE_SCAN_EXCLUDE);
 		const tagPattern = /@(bookmark|todo|review|warn|breakpoint|note|region|endregion)\b/;
+		const discoveredFiles = new Set<string> ();
+		const taggedFiles = new Set<string> ();
 
 		for (const fileUri of files) {
 			const relativePath = vscode.workspace.asRelativePath (fileUri);
+			discoveredFiles.add (relativePath);
 			// forceRescan이 아니면, 이미 스캔 완료된 파일 건너뛰기
 			if (!forceRescan && this.annotations.some ((a) => a.file === relativePath && !a.virtual)) {
 				continue;
@@ -534,10 +538,19 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				const doc = await vscode.workspace.openTextDocument (fileUri);
 				const text = doc.getText ();
 				if (tagPattern.test (text)) {
+					taggedFiles.add (relativePath);
 					this.scanDocument (doc);
 				}
 			} catch {
 				// 파일 열기 실패 무시
+			}
+		}
+
+		if (forceRescan) {
+			const reconciled = reconcileWorkspaceAnnotations (this.annotations, discoveredFiles, taggedFiles);
+			if (reconciled.length !== this.annotations.length) {
+				this.annotations = reconciled;
+				this.saveAnnotations ();
 			}
 		}
 	}

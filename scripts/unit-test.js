@@ -31,6 +31,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
 };
 
 const { ConfigManager } = require('../out/utils/configManager.js');
+const { reconcileWorkspaceAnnotations } = require('../out/utils/annotationReconciler.js');
 const { GitHubPrClient } = require('../out/utils/githubPrClient.js');
 const { GdbWarnTracker } = require('../out/features/gdbWarnTracker.js');
 const {
@@ -222,6 +223,29 @@ function testShadowDiffMapsHeadLinesAfterInsertionAbove() {
 	);
 }
 
+function testReconcileWorkspaceAnnotationsDropsStaleNonVirtualEntries() {
+	const annotations = [
+		{ file: 'threads/a.c', type: 'todo' },
+		{ file: 'threads/b.c', type: 'warn' },
+		{ file: 'threads/missing.c', type: 'bookmark' },
+		{ file: 'threads/virtual.c', type: 'review', virtual: true },
+	];
+	const reconciled = reconcileWorkspaceAnnotations(
+		annotations,
+		new Set(['threads/a.c', 'threads/b.c']),
+		new Set(['threads/a.c'])
+	);
+
+	assert.deepStrictEqual(
+		reconciled,
+		[
+			{ file: 'threads/a.c', type: 'todo' },
+			{ file: 'threads/virtual.c', type: 'review', virtual: true },
+		],
+		'refresh scans should drop stale non-virtual annotations for removed or tag-free files while keeping virtual entries'
+	);
+}
+
 async function main() {
 	await testInitProjectIgnoresAnnotationNotes();
 	await testInitProjectAddsExactGitignoreRuleEvenWithSimilarEntry();
@@ -232,6 +256,7 @@ async function main() {
 	testGdbWarnTrackerStillCapturesSignals();
 	testShadowDiffMapsHeadLinesAfterDeletionAbove();
 	testShadowDiffMapsHeadLinesAfterInsertionAbove();
+	testReconcileWorkspaceAnnotationsDropsStaleNonVirtualEntries();
 	console.log('Unit test passed.');
 }
 
