@@ -2039,50 +2039,61 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				fs.mkdirSync (scriptsDir, { recursive: true });
 			}
 
-			const cleanScript = path.join (scriptsDir, 'clean-local.sh');
-			const smudgeScript = path.join (scriptsDir, 'smudge-local.sh');
+			const cleanScript = path.join (scriptsDir, 'clean-local.js');
 
-			// sed 기반 필터 — macOS/Linux 모두 호환 (awk ERE 그룹 호환성 문제 해결)
-			// 각 태그를 개별 패턴으로 나열하여 ERE () 그룹 없이 처리
-			// 규칙 1: // @tag … (단일 줄) → 삭제
-			// 규칙 2: /* @tag … */ (한 줄 블록) → 삭제
-			// 규칙 3: /* @tag … (멀티라인 시작) → 다음 */ 까지 전부 삭제
-			const tagList = ['todo', 'bookmark', 'review', 'warn', 'breakpoint', 'note', 'region', 'endregion'];
+			// Node.js 기반 필터 — macOS/Windows/Linux 모두 동일 동작
+			// bash/sed/awk 호환성 문제 완전 해소
+			// stdin → stdout 파이프로 동작, 어노테이션 태그 주석만 제거
+			const nodeScript = `#!/usr/bin/env node
+'use strict';
+const tags = ['todo','bookmark','review','warn','breakpoint','note','region','endregion'];
+const tagPattern = tags.join('|');
+const singleLineRe = new RegExp('^\\\\s*\\\\/\\\\/\\\\s*@(' + tagPattern + ')(\\\\s|$)');
+const blockSingleRe = new RegExp('^\\\\s*\\\\/\\\\*\\\\s*@(' + tagPattern + ').*\\\\*\\\\/$');
+const blockStartRe  = new RegExp('^\\\\s*\\\\/\\\\*\\\\s*@(' + tagPattern + ')(\\\\s|$)');
 
-			// 단일 줄 // @tag 삭제 (각 태그별 -e 옵션)
-			const singleLinePatterns = tagList.map (t =>
-				`-e '/^[[:space:]]*\\/\\/[[:space:]]*@${t}[[:space:]]*$/d' -e '/^[[:space:]]*\\/\\/[[:space:]]*@${t}[[:space:]]/d'`
-			).join (' ');
-
-			// 한 줄 블록 주석 /* @tag … */ 삭제
-			const blockSinglePatterns = tagList.map (t =>
-				`-e '/^[[:space:]]*\\/\\*[[:space:]]*@${t}.*\\*\\//d'`
-			).join (' ');
-
-			// 멀티라인 블록 주석 /* @tag … ~ */ 삭제
-			const blockMultiPatterns = tagList.map (t =>
-				`-e '/^[[:space:]]*\\/\\*[[:space:]]*@${t}/,/\\*\\//d'`
-			).join (' ');
-
-			const scriptContent = [
-				'#!/bin/bash',
-				`sed ${singleLinePatterns} ${blockSinglePatterns} ${blockMultiPatterns} || cat`,
-			].join ('\n');
-
-			fs.writeFileSync (cleanScript, scriptContent + '\n', { mode: 0o755 });
-			fs.writeFileSync (smudgeScript, '#!/bin/bash\ncat\n', { mode: 0o755 });
+let buf = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', c => { buf += c; });
+process.stdin.on('end', () => {
+  const lines = buf.split('\\n');
+  const out = [];
+  let skip = false;
+  for (const line of lines) {
+    if (skip) {
+      if (line.includes('*/')) { skip = false; }
+      continue;
+    }
+    if (singleLineRe.test(line)) { continue; }
+    if (blockSingleRe.test(line)) { continue; }
+    if (blockStartRe.test(line)) { skip = true; continue; }
+    out.push(line);
+  }
+  process.stdout.write(out.join('\\n'));
+});
+`;
+			fs.writeFileSync (cleanScript, nodeScript, { mode: 0o755 });
 
 			const filterName = 'jungle-local';
 
-			// execFile로 shell injection 방지
+			// Node.js 실행 경로: VS Code가 보장하는 node를 사용
+			// Windows에서도 node는 PATH에 있음 (VS Code/git 환경)
+			const cleanCmd = `node "${cleanScript.replace (/\\/g, '/')}"`;
+			const smudgeCmd = 'cat';
+
 			const { execFile: execFileCb } = require ('child_process');
 			const execFileP = promisify (execFileCb);
-			await execFileP ('git', ['config', `filter.${filterName}.clean`, `bash '${cleanScript}'`], { cwd: root });
-			await execFileP ('git', ['config', `filter.${filterName}.smudge`, `bash '${smudgeScript}'`], { cwd: root });
+			await execFileP ('git', ['config', `filter.${filterName}.clean`, cleanCmd], { cwd: root });
+			await execFileP ('git', ['config', `filter.${filterName}.smudge`, smudgeCmd], { cwd: root });
 
-			// 이전 버전 필터 config 정리
+			// 레거시 필터 및 스크립트 정리
 			try { await execFileP ('git', ['config', '--unset', 'filter.junglekit-local.clean'], { cwd: root }); } catch { /* 없으면 무시 */ }
 			try { await execFileP ('git', ['config', '--unset', 'filter.junglekit-local.smudge'], { cwd: root }); } catch { /* 없으면 무시 */ }
+			// 이전 bash 스크립트 파일 제거
+			const legacySh = path.join (scriptsDir, 'clean-local.sh');
+			if (fs.existsSync (legacySh)) { try { fs.unlinkSync (legacySh); } catch {} }
+			const legacySmudge = path.join (scriptsDir, 'smudge-local.sh');
+			if (fs.existsSync (legacySmudge)) { try { fs.unlinkSync (legacySmudge); } catch {} }
 
 			// .gitattributes 정리 — 중복/레거시 엔트리 제거 후 정규화
 			const gaPath = path.join (root, '.gitattributes');
