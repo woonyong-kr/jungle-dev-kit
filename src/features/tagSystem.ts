@@ -231,7 +231,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				version: 2,
 				annotations: this.annotations,
 			};
-			fs.writeFileSync (this.dataFilePath, JSON.stringify (data, null, 2));
+			// atomic write: 임시 파일에 쓰고 renameSync로 교체 — 크래시 시 데이터 유실 방지
+			const tmpPath = this.dataFilePath + '.tmp';
+			fs.writeFileSync (tmpPath, JSON.stringify (data, null, 2));
+			fs.renameSync (tmpPath, this.dataFilePath);
 		} catch (err) {
 			console.error ('[Annotation] annotations.json 저장 실패:', err);
 			vscode.window.showWarningMessage ('[Annotation] 태그 데이터 저장에 실패했습니다. 디스크 공간 또는 파일 권한을 확인하세요.');
@@ -2039,56 +2042,64 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			const cleanScript = path.join (scriptsDir, 'clean-local.sh');
 			const smudgeScript = path.join (scriptsDir, 'smudge-local.sh');
 
-			// awk 기반 필터: 멀티라인 블록 주석 전체 제거
+			// sed 기반 필터 — macOS/Linux 모두 호환 (awk ERE 그룹 호환성 문제 해결)
+			// 각 태그를 개별 패턴으로 나열하여 ERE () 그룹 없이 처리
 			// 규칙 1: // @tag … (단일 줄) → 삭제
 			// 규칙 2: /* @tag … */ (한 줄 블록) → 삭제
-			// 규칙 3: /* @tag … (여러 줄 시작) → skip 모드, */ 만날 때까지 전부 삭제
-			const tags = 'todo|bookmark|review|warn|breakpoint|note|region|endregion';
-			const awkLines = [
+			// 규칙 3: /* @tag … (멀티라인 시작) → 다음 */ 까지 전부 삭제
+			const tagList = ['todo', 'bookmark', 'review', 'warn', 'breakpoint', 'note', 'region', 'endregion'];
+
+			// 단일 줄 // @tag 삭제 (각 태그별 -e 옵션)
+			const singleLinePatterns = tagList.map (t =>
+				`-e '/^[[:space:]]*\\/\\/[[:space:]]*@${t}[[:space:]]*$/d' -e '/^[[:space:]]*\\/\\/[[:space:]]*@${t}[[:space:]]/d'`
+			).join (' ');
+
+			// 한 줄 블록 주석 /* @tag … */ 삭제
+			const blockSinglePatterns = tagList.map (t =>
+				`-e '/^[[:space:]]*\\/\\*[[:space:]]*@${t}.*\\*\\//d'`
+			).join (' ');
+
+			// 멀티라인 블록 주석 /* @tag … ~ */ 삭제
+			const blockMultiPatterns = tagList.map (t =>
+				`-e '/^[[:space:]]*\\/\\*[[:space:]]*@${t}/,/\\*\\//d'`
+			).join (' ');
+
+			const scriptContent = [
 				'#!/bin/bash',
-				"awk '",
-				'BEGIN{s=0}',
-				`/^[[:space:]]*\\/\\/[[:space:]]*@(${tags})([[:space:]]|$)/{next}`,
-				`/^[[:space:]]*\\/\\*[[:space:]]*@(${tags})([[:space:]]|$)/&&/\\*\\//{next}`,
-				`/^[[:space:]]*\\/\\*[[:space:]]*@(${tags})([[:space:]]|$)/{s=1;next}`,
-				's&&/\\*\\//{s=0;next}',
-				's{next}',
-				'{print}',
-				"' || true",
-			];
-			fs.writeFileSync (cleanScript, awkLines.join ('\n') + '\n', { mode: 0o755 });
+				`sed ${singleLinePatterns} ${blockSinglePatterns} ${blockMultiPatterns} || cat`,
+			].join ('\n');
+
+			fs.writeFileSync (cleanScript, scriptContent + '\n', { mode: 0o755 });
 			fs.writeFileSync (smudgeScript, '#!/bin/bash\ncat\n', { mode: 0o755 });
 
 			const filterName = 'jungle-local';
-			await execAsync (`git config filter.${filterName}.clean "bash '${cleanScript.replace (/'/g, "'\\''")}'"`  , { cwd: root });
-			await execAsync (`git config filter.${filterName}.smudge "bash '${smudgeScript.replace (/'/g, "'\\''")}'"`  , { cwd: root });
+
+			// execFile로 shell injection 방지
+			const { execFile: execFileCb } = require ('child_process');
+			const execFileP = promisify (execFileCb);
+			await execFileP ('git', ['config', `filter.${filterName}.clean`, `bash '${cleanScript}'`], { cwd: root });
+			await execFileP ('git', ['config', `filter.${filterName}.smudge`, `bash '${smudgeScript}'`], { cwd: root });
 
 			// 이전 버전 필터 config 정리
-			try { await execAsync ('git config --unset filter.junglekit-local.clean', { cwd: root }); } catch { /* 없으면 무시 */ }
-			try { await execAsync ('git config --unset filter.junglekit-local.smudge', { cwd: root }); } catch { /* 없으면 무시 */ }
+			try { await execFileP ('git', ['config', '--unset', 'filter.junglekit-local.clean'], { cwd: root }); } catch { /* 없으면 무시 */ }
+			try { await execFileP ('git', ['config', '--unset', 'filter.junglekit-local.smudge'], { cwd: root }); } catch { /* 없으면 무시 */ }
 
+			// .gitattributes 정리 — 중복/레거시 엔트리 제거 후 정규화
 			const gaPath = path.join (root, '.gitattributes');
-			const filterLine = `*.c filter=${filterName}`;
-			const filterLineH = `*.h filter=${filterName}`;
-
 			let gaContent = '';
 			if (fs.existsSync (gaPath)) {
 				gaContent = fs.readFileSync (gaPath, 'utf-8');
 			}
 
-			// 이전 버전의 필터 이름(junglekit-local 등)을 현재 이름으로 마이그레이션
-			const original = gaContent;
-			gaContent = gaContent.replace (/filter=junglekit-local/g, `filter=${filterName}`);
+			// 기존 filter= 관련 줄 모두 제거 (junglekit-local, jungle-local 등)
+			const lines = gaContent.split ('\n').filter (l => !/filter=(junglekit-local|jungle-local)/.test (l));
+			// 새 엔트리 추가
+			lines.push (`*.c filter=${filterName}`);
+			lines.push (`*.h filter=${filterName}`);
+			const newGaContent = lines.filter (l => l.trim ().length > 0).join ('\n') + '\n';
 
-			if (!gaContent.includes (filterLine)) {
-				gaContent += `\n${filterLine}\n`;
-			}
-			if (!gaContent.includes (filterLineH)) {
-				const prefix = gaContent.endsWith ('\n') ? '' : '\n';
-				gaContent += `${prefix}${filterLineH}\n`;
-			}
-			if (gaContent !== original) {
-				fs.writeFileSync (gaPath, gaContent.trimStart ());
+			if (newGaContent !== gaContent) {
+				fs.writeFileSync (gaPath, newGaContent);
 			}
 		} catch (err) {
 			console.error ('[Annotation] Filter setup failed:', err);
@@ -2163,8 +2174,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 	}
 
+	private _idCounter = 0;
 	private generateId (): string {
-		return `${Date.now ()}-${Math.random ().toString (36).substring (2, 8)}`;
+		return `${Date.now ()}-${(this._idCounter++).toString (36)}-${Math.random ().toString (36).substring (2, 8)}`;
 	}
 
 	// ──────────────────────────────────────────
@@ -2807,12 +2819,18 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 		}
 
-		// 저장
+		// 저장 — 백업 후 atomic write
 		try {
 			if (!fs.existsSync (configDir)) {
 				fs.mkdirSync (configDir, { recursive: true });
 			}
-			fs.writeFileSync (keybindingsPath, content);
+			// 기존 파일 백업
+			if (fs.existsSync (keybindingsPath)) {
+				try { fs.copyFileSync (keybindingsPath, keybindingsPath + '.backup'); } catch {}
+			}
+			const tmpPath = keybindingsPath + '.tmp';
+			fs.writeFileSync (tmpPath, content);
+			fs.renameSync (tmpPath, keybindingsPath);
 		} catch (err) {
 			console.error ('[Annotation] keybindings.json 저장 실패:', err);
 			vscode.window.showErrorMessage ('[Annotation] 단축키 적용 실패: keybindings.json에 쓸 수 없습니다.');

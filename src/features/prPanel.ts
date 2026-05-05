@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { GitUtils } from '../utils/gitUtils';
 import { APIKeyManager } from '../utils/apiKeyManager';
@@ -9,6 +9,7 @@ import { ConfigManager, PR_DIFF_TRUNCATE_LIMIT } from '../utils/configManager';
 import { TagSystem } from './tagSystem';
 
 const execAsync = promisify (exec);
+const execFileAsync = promisify (execFile);
 
 function escapeHtml (str: string): string {
 	return str
@@ -127,7 +128,9 @@ export class PRPanel {
 				// base 브랜치가 바뀌면 diff와 파일 목록을 다시 계산
 				const newBase = message.base as string;
 				const newDiff = await this.git.getStagedDiff () || await this.git.getDiffAgainst (newBase);
+				if (!this._panel) { break; }
 				const newChangedFiles = await this.git.getChangedFiles (newBase);
+				if (!this._panel) { break; }
 				panel.webview.postMessage ({
 					command: 'updateFiles',
 					files: newChangedFiles,
@@ -396,18 +399,17 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 			fs.writeFileSync (titleFile, data.title);
 			fs.writeFileSync (bodyFile, data.body);
 
-			// Read title from file via subshell to avoid shell metacharacter issues
-			const safeTitle = fs.readFileSync (titleFile, 'utf-8').trim ()
-				.replace (/'/g, "'\\''");
+			// execFile 인자 배열 방식으로 shell injection 완전 차단
+			const title = fs.readFileSync (titleFile, 'utf-8').trim ();
 			const safeBase = data.base.replace (/[^a-zA-Z0-9_\-\/\.]/g, '');
 
-			let cmd = `gh pr create --title '${safeTitle}' --body-file "${bodyFile}" --base "${safeBase}"`;
+			const args = ['pr', 'create', '--title', title, '--body-file', bodyFile, '--base', safeBase];
 			if (data.reviewers.trim ()) {
 				const safeReviewers = data.reviewers.trim ().replace (/[^a-zA-Z0-9_\-,]/g, '');
-				cmd += ` --reviewer "${safeReviewers}"`;
+				args.push ('--reviewer', safeReviewers);
 			}
 
-			const { stdout } = await execAsync (cmd, { cwd: root, timeout: 30000 });
+			const { stdout } = await execFileAsync ('gh', args, { cwd: root, timeout: 30000 });
 			const prUrl = stdout.trim ();
 
 			panel.webview.postMessage ({

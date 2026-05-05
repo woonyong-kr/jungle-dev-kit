@@ -62,18 +62,15 @@ const DEFAULT_ENV: EnvConfig = {
 
 export class ConfigManager {
 	private context: vscode.ExtensionContext;
-	private configDir: string = '';
 
 	constructor (context: vscode.ExtensionContext) {
 		this.context = context;
-		const ws = vscode.workspace.workspaceFolders?.[0];
-		if (ws) {
-			this.configDir = path.join (ws.uri.fsPath, '.jungle-kit');
-		}
 	}
 
+	/** 워크스페이스 변경 시에도 항상 최신 경로를 반환 */
 	getConfigDir (): string {
-		return this.configDir;
+		const root = this.getWorkspaceRoot ();
+		return root ? path.join (root, '.jungle-kit') : '';
 	}
 
 	getWorkspaceRoot (): string {
@@ -81,18 +78,18 @@ export class ConfigManager {
 	}
 
 	async initProject (): Promise<void> {
-		if (!this.configDir) {
+		if (!this.getConfigDir ()) {
 			vscode.window.showErrorMessage ('No workspace folder open');
 			return;
 		}
 
 		try {
-			if (!fs.existsSync (this.configDir)) {
-				fs.mkdirSync (this.configDir, { recursive: true });
+			if (!fs.existsSync (this.getConfigDir ())) {
+				fs.mkdirSync (this.getConfigDir (), { recursive: true });
 			}
 
 			// Create config.json
-			const configPath = path.join (this.configDir, 'config.json');
+			const configPath = path.join (this.getConfigDir (), 'config.json');
 			if (!fs.existsSync (configPath)) {
 				const config: JungleKitConfig = {
 					project: 'pintos',
@@ -109,7 +106,7 @@ export class ConfigManager {
 			// Create subdirectories
 			const dirs = ['notes'];
 			for (const dir of dirs) {
-				const dirPath = path.join (this.configDir, dir);
+				const dirPath = path.join (this.getConfigDir (), dir);
 				if (!fs.existsSync (dirPath)) {
 					fs.mkdirSync (dirPath, { recursive: true });
 				}
@@ -125,7 +122,7 @@ export class ConfigManager {
 	}
 
 loadEnvConfig (): EnvConfig {
-		const configPath = path.join (this.configDir, 'config.json');
+		const configPath = path.join (this.getConfigDir (), 'config.json');
 		if (fs.existsSync (configPath)) {
 			try {
 				const raw = fs.readFileSync (configPath, 'utf-8');

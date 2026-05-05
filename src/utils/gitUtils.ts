@@ -23,11 +23,11 @@ export class GitUtils {
 		return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 	}
 
-	private async run (cmd: string): Promise<string> {
+	private async run (cmd: string, timeout = 30000): Promise<string> {
 		const cwd = this.getCwd ();
 		if (!cwd) { return ''; }
 		try {
-			const { stdout } = await execAsync (cmd, { cwd, maxBuffer: MAX_BUFFER });
+			const { stdout } = await execAsync (cmd, { cwd, maxBuffer: MAX_BUFFER, timeout });
 			return stdout.trim ();
 		} catch (error: any) {
 			console.warn (`[Annotation] git command failed: ${cmd.substring (0, 80)}`, error.message || '');
@@ -45,7 +45,7 @@ export class GitUtils {
 
 	async getDiffAgainst (base: string): Promise<string> {
 		const current = await this.getCurrentBranch ();
-		if (!current) { return ''; }
+		if (!current || !base) { return ''; }
 		return this.run (`git diff ${sanitizeRef (base)}..${sanitizeRef (current)}`);
 	}
 

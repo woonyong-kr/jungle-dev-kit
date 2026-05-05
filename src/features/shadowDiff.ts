@@ -103,7 +103,16 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 					{ location: vscode.ProgressLocation.Notification, title: 'Pull 중...' },
 					async () => {
 						const root = this.config.getWorkspaceRoot ();
-						await execAsync ('git pull --rebase', { cwd: root, maxBuffer: MAX_BUFFER });
+						if (!root) { throw new Error ('워크스페이스가 열려있지 않습니다.'); }
+						try {
+							await execAsync ('git pull --rebase', { cwd: root, maxBuffer: MAX_BUFFER, timeout: 60000 });
+						} catch (pullErr: any) {
+							const msg = pullErr.stderr || pullErr.message || '';
+							if (msg.includes ('CONFLICT') || msg.includes ('conflict')) {
+								throw new Error ('rebase 충돌이 발생했습니다. 터미널에서 충돌을 해결한 후 `git rebase --continue` 또는 `git rebase --abort` 를 실행하세요.');
+							}
+							throw pullErr;
+						}
 					}
 				);
 				vscode.window.showInformationMessage ('Pull 완료');
@@ -115,7 +124,8 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 					{ location: vscode.ProgressLocation.Notification, title: 'Push 중...' },
 					async () => {
 						const root = this.config.getWorkspaceRoot ();
-						await execAsync (`git push origin ${sanitizeRef (branch)}`, { cwd: root, maxBuffer: MAX_BUFFER });
+						if (!root) { throw new Error ('워크스페이스가 열려있지 않습니다.'); }
+						await execAsync (`git push origin ${sanitizeRef (branch)}`, { cwd: root, maxBuffer: MAX_BUFFER, timeout: 60000 });
 					}
 				);
 				vscode.window.showInformationMessage ('Push 완료');
@@ -129,8 +139,10 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 
 	// --- Shadow Diff Core ---
 
+	private _isFetching = false;
 	private async fetchAndAnalyze (): Promise<void> {
-		if (this._disposed) { return; }
+		if (this._disposed || this._isFetching) { return; }
+		this._isFetching = true;
 		try {
 			await this.git.fetch ();
 			if (this._disposed) { return; }
@@ -138,8 +150,10 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 			if (this._disposed) { return; }
 			this.updateAllDecorations ();
 			this._onDidChangeCodeLenses.fire ();
-		} catch {
-			// Silently fail if offline or not in git repo
+		} catch (err) {
+			console.warn ('[Annotation] ShadowDiff fetch/analyze 실패:', err instanceof Error ? err.message : err);
+		} finally {
+			this._isFetching = false;
 		}
 	}
 

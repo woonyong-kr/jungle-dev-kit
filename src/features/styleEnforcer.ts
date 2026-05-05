@@ -98,9 +98,11 @@ export class StyleEnforcer {
 
 		if (vscodeSetting.get<boolean> ('style.autoCreateClangFormat', true)) {
 			try {
-				// 매 활성화 시 강제 덮어쓰기 — 사용자 수정분도 최신 컨벤션으로 통일
-				fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
-				console.log ('[Annotation] .clang-format 강제 동기화 (워크스페이스 루트)');
+				// 파일이 없을 때만 생성 — 사용자 커스텀 설정을 보존
+				if (!fs.existsSync (clangFormatPath)) {
+					fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
+					console.log ('[Annotation] .clang-format 생성 (워크스페이스 루트)');
+				}
 			} catch (err) {
 				console.warn ('[Annotation] .clang-format 쓰기 실패 (읽기 전용 파일시스템?):', err);
 			}
