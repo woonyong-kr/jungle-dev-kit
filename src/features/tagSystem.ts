@@ -2188,10 +2188,12 @@ process.stdin.on('end', () => {
 
 			const filterName = 'annotation-local';
 
-			// Node.js 실행 경로: VS Code가 보장하는 node를 사용
-			// Windows에서도 node는 PATH에 있음 (VS Code/git 환경)
-			const cleanCmd = `node "${cleanScript.replace (/\\/g, '/')}"`;
-			const smudgeCmd = `node "${smudgeScript.replace (/\\/g, '/')}" %f`;
+			// git filter 경로: 상대경로를 사용하여 devcontainer ↔ 호스트 간 이식성 확보
+			// git은 레포 루트 기준으로 filter 명령을 실행하므로 상대경로가 정확히 동작함
+			const relClean = '.annotation/scripts/clean-local.js';
+			const relSmudge = '.annotation/scripts/smudge-local.js';
+			const cleanCmd = `node "${relClean}"`;
+			const smudgeCmd = `node "${relSmudge}" %f`;
 
 			const { execFile: execFileCb } = require ('child_process');
 			const execFileP = promisify (execFileCb);
