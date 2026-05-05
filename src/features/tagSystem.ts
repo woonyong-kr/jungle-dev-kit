@@ -201,26 +201,41 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private loadAnnotations (): void {
 		try {
 			if (fs.existsSync (this.dataFilePath)) {
-				const raw: AnnotationsData = JSON.parse (
-					fs.readFileSync (this.dataFilePath, 'utf-8')
-				);
+				const content = fs.readFileSync (this.dataFilePath, 'utf-8');
+				const raw: AnnotationsData = JSON.parse (content);
 				this.annotations = raw.annotations || [];
 			}
-		} catch {
+		} catch (err) {
+			console.error ('[Annotation] annotations.json 로드 실패:', err);
+			// 손상된 파일 백업 후 빈 상태로 시작
+			try {
+				if (fs.existsSync (this.dataFilePath)) {
+					const backupPath = this.dataFilePath + '.backup';
+					fs.copyFileSync (this.dataFilePath, backupPath);
+					vscode.window.showWarningMessage (
+						`[Annotation] 태그 데이터 파일이 손상되었습니다. 백업: ${backupPath}`
+					);
+				}
+			} catch { /* 백업 실패 시 무시 */ }
 			this.annotations = [];
 		}
 	}
 
 	private saveAnnotations (): void {
-		const dir = path.dirname (this.dataFilePath);
-		if (!fs.existsSync (dir)) {
-			fs.mkdirSync (dir, { recursive: true });
+		try {
+			const dir = path.dirname (this.dataFilePath);
+			if (!fs.existsSync (dir)) {
+				fs.mkdirSync (dir, { recursive: true });
+			}
+			const data: AnnotationsData = {
+				version: 2,
+				annotations: this.annotations,
+			};
+			fs.writeFileSync (this.dataFilePath, JSON.stringify (data, null, 2));
+		} catch (err) {
+			console.error ('[Annotation] annotations.json 저장 실패:', err);
+			vscode.window.showWarningMessage ('[Annotation] 태그 데이터 저장에 실패했습니다. 디스크 공간 또는 파일 권한을 확인하세요.');
 		}
-		const data: AnnotationsData = {
-			version: 2,
-			annotations: this.annotations,
-		};
-		fs.writeFileSync (this.dataFilePath, JSON.stringify (data, null, 2));
 	}
 
 	private ensureGitignore (root: string): void {
@@ -606,7 +621,11 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		const edit = new vscode.WorkspaceEdit ();
 		edit.insert (editor.document.uri, new vscode.Position (line, 0), commentText);
-		await vscode.workspace.applyEdit (edit);
+		const applied = await vscode.workspace.applyEdit (edit);
+		if (!applied) {
+			vscode.window.showWarningMessage ('[Annotation] 태그 삽입에 실패했습니다. 파일이 읽기 전용일 수 있습니다.');
+			return;
+		}
 
 		// 스캔이 자동으로 트리거되므로 별도 처리 불필요
 		console.log (`[Annotation] @${type} 어노테이션 추가`);
@@ -2193,8 +2212,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private shortcutPanel: vscode.WebviewPanel | undefined;
 
 	async configureShortcuts (): Promise<void> {
-		// Re-use existing panel if already open
+		// Re-use existing panel if already open — HTML 갱신하여 최신 상태 반영
 		if (this.shortcutPanel) {
+			const shortcuts = this.loadShortcutSettings ();
+			this.shortcutPanel.webview.html = this.getShortcutWebviewContent (shortcuts);
 			this.shortcutPanel.reveal (vscode.ViewColumn.One);
 			return;
 		}
@@ -2669,14 +2690,23 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
     }
   });
 
+  // 초기 렌더링
   try {
-    if (!shortcuts || shortcuts.length === 0) {
-      document.getElementById('content').innerHTML = '<p style="padding:20px;opacity:0.7;">등록된 단축키가 없습니다. "초기화" 버튼을 눌러 기본값을 복원하세요.</p>';
+    console.log('[Annotation] Shortcut WebView init — shortcuts:', JSON.stringify(shortcuts));
+    if (!shortcuts || !Array.isArray(shortcuts) || shortcuts.length === 0) {
+      document.getElementById('content').innerHTML =
+        '<div style="padding:24px;text-align:center;">'
+        + '<p style="opacity:0.7;margin-bottom:16px;">등록된 단축키가 없습니다.</p>'
+        + '<button class="btn btn-primary" onclick="vscode.postMessage({command:\\'reset\\'})">기본값으로 초기화</button>'
+        + '</div>';
     } else {
       render();
     }
   } catch(e) {
-    document.getElementById('content').innerHTML = '<p style="color:var(--vscode-errorForeground);padding:20px;">렌더링 오류: ' + (e && e.message ? esc(e.message) : 'unknown') + '</p>';
+    console.error('[Annotation] Shortcut render error:', e);
+    document.getElementById('content').innerHTML =
+      '<p style="color:var(--vscode-errorForeground);padding:20px;">렌더링 오류: '
+      + (e && e.message ? esc(e.message) : String(e)) + '</p>';
   }
 </script>
 </body>

@@ -155,6 +155,13 @@ export class StyleEnforcer {
 			// No output = no violations
 			this.diagnostics.set (doc.uri, []);
 		} catch (error: any) {
+			// clang-format 미설치 감지 (ENOENT)
+			if (error.code === 'ENOENT') {
+				vscode.window.showWarningMessage (
+					'[Annotation] clang-format이 설치되어 있지 않습니다. 스타일 검사를 사용하려면 clang-format을 설치하세요.'
+				);
+				return;
+			}
 			const output = error.stderr || error.stdout || '';
 			const diags = this.parseClangFormatOutput (output, doc);
 			this.diagnostics.set (doc.uri, diags);

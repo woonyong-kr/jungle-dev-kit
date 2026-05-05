@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.22.0] - 2026-05-05
+
+### Fixed
+- **tagSystem**: 단축키 패널 재열기 시 HTML 갱신되지 않던 문제 수정 — `reveal()` 전에 최신 설정으로 HTML 재생성
+- **tagSystem**: `saveAnnotations()` try-catch 래핑 — 디스크 I/O 실패 시 크래시 대신 경고 메시지 표시
+- **tagSystem**: `loadAnnotations()` JSON 손상 시 백업 파일 자동 생성 + 경고 메시지 표시 (데이터 유실 방지)
+- **tagSystem**: `addTag()` applyEdit 실패 시 사용자에게 경고 표시 (읽기전용 파일 등)
+- **prPanel**: `openPanel()` 에러 시 사용자에게 에러 메시지 표시 (무음 실패 제거)
+- **prPanel**: `retainContextWhenHidden` 추가 — 탭 전환 시 입력 내용 유지
+- **styleEnforcer**: `clang-format` 미설치(ENOENT) 감지 후 설치 안내 메시지 표시
+
 ## [0.21.1] - 2026-05-05
 
 ### Fixed

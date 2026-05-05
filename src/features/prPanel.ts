@@ -55,7 +55,7 @@ export class PRPanel {
 			'jungleKit.prPanel',
 			'PR 만들기',
 			vscode.ViewColumn.One,
-			{ enableScripts: true }
+			{ enableScripts: true, retainContextWhenHidden: true }
 		);
 
 		this._panel = panel;
@@ -151,6 +151,7 @@ export class PRPanel {
 		this.checkExistingPR (panel);
 		} catch (err: any) {
 			console.error ('[Annotation] PR panel open failed:', err);
+			vscode.window.showErrorMessage (`[Annotation] PR 패널 로드 실패: ${err.message || err}`);
 			try { panel.dispose (); } catch { /* already disposed */ }
 		}
 	}
@@ -174,8 +175,9 @@ export class PRPanel {
 					title: pr.title || '',
 				});
 			}
-		} catch {
-			// gh 미설치·미인증·PR 없음 — 모두 무시 (정상 플로우)
+		} catch (err: any) {
+			// gh 미설치·미인증·PR 없음 — 무시하되 로그는 남김
+			console.log ('[Annotation] checkExistingPR skipped:', err?.message || 'gh not available');
 		}
 	}
 
