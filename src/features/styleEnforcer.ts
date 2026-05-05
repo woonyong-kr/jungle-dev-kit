@@ -57,6 +57,24 @@ MaxEmptyLinesToKeep: 1
 KeepEmptyLinesAtTheStartOfBlocks: false
 `;
 
+interface AutoCreateSettingInspect {
+	workspaceFolderValue?: boolean;
+	workspaceValue?: boolean;
+}
+
+export function resolveAutoCreateClangFormat (
+	projectValue: boolean,
+	settingInspect?: AutoCreateSettingInspect
+): boolean {
+	if (typeof settingInspect?.workspaceFolderValue === 'boolean') {
+		return settingInspect.workspaceFolderValue;
+	}
+	if (typeof settingInspect?.workspaceValue === 'boolean') {
+		return settingInspect.workspaceValue;
+	}
+	return projectValue;
+}
+
 export class StyleEnforcer {
 	private config: ConfigManager;
 	private diagnostics: vscode.DiagnosticCollection;
@@ -95,8 +113,13 @@ export class StyleEnforcer {
 
 		const clangFormatPath = path.join (root, '.clang-format');
 		const vscodeSetting = vscode.workspace.getConfiguration ('jungleKit');
+		const projectStyle = this.config.loadStyleConfig ();
+		const autoCreateClangFormat = resolveAutoCreateClangFormat (
+			projectStyle.autoCreateClangFormat,
+			vscodeSetting.inspect<boolean> ('style.autoCreateClangFormat')
+		);
 
-		if (vscodeSetting.get<boolean> ('style.autoCreateClangFormat', true)) {
+		if (autoCreateClangFormat) {
 			if (!fs.existsSync (clangFormatPath)) {
 				try {
 					fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);

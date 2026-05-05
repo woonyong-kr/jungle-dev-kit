@@ -56,6 +56,10 @@ const DEFAULT_ENV: EnvConfig = {
 	showOnStartup: true,
 };
 
+const DEFAULT_STYLE: StyleConfig = {
+	autoCreateClangFormat: true,
+};
+
 export class ConfigManager {
 	private context: vscode.ExtensionContext;
 
@@ -90,9 +94,7 @@ export class ConfigManager {
 				const config: JungleKitConfig = {
 					convention: DEFAULT_CONVENTION,
 					env: DEFAULT_ENV,
-					style: {
-						autoCreateClangFormat: true,
-					},
+					style: DEFAULT_STYLE,
 				};
 				fs.writeFileSync (configPath, JSON.stringify (config, null, 2));
 			}
@@ -134,6 +136,23 @@ export class ConfigManager {
 			}
 		}
 		return DEFAULT_ENV;
+	}
+
+	loadStyleConfig (): StyleConfig {
+		const configPath = path.join (this.getConfigDir (), 'config.json');
+		if (fs.existsSync (configPath)) {
+			try {
+				const raw = fs.readFileSync (configPath, 'utf-8');
+				const config = JSON.parse (raw) as JungleKitConfig;
+				return {
+					...DEFAULT_STYLE,
+					...(config.style ?? {}),
+				};
+			} catch {
+				return DEFAULT_STYLE;
+			}
+		}
+		return DEFAULT_STYLE;
 	}
 
 	/**

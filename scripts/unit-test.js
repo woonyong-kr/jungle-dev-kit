@@ -34,6 +34,7 @@ const { ConfigManager } = require('../out/utils/configManager.js');
 const { reconcileWorkspaceAnnotations } = require('../out/utils/annotationReconciler.js');
 const { GitHubPrClient } = require('../out/utils/githubPrClient.js');
 const { GdbWarnTracker } = require('../out/features/gdbWarnTracker.js');
+const { resolveAutoCreateClangFormat } = require('../out/features/styleEnforcer.js');
 const {
 	parseWorkingTreeDiffHunks,
 	mapHeadLineToWorkingTree,
@@ -109,6 +110,30 @@ async function testLoadEnvConfigMergesChecksDeeply() {
 		assert.strictEqual(env.checks.gcc, false, 'loadEnvConfig should keep explicit nested check overrides');
 		assert.strictEqual(env.checks.qemu, true, 'loadEnvConfig should preserve default nested checks');
 		assert.strictEqual(env.checks.make, true, 'loadEnvConfig should preserve all unspecified nested checks');
+	});
+}
+
+async function testLoadStyleConfigHonorsProjectConfig() {
+	await withTempWorkspace((workspaceRoot) => {
+		const configDir = path.join(workspaceRoot, '.annotation');
+		fs.mkdirSync(configDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(configDir, 'config.json'),
+			JSON.stringify({
+				style: {
+					autoCreateClangFormat: false,
+				},
+			})
+		);
+
+		const manager = new ConfigManager({ extensionPath: workspaceRoot });
+		const style = manager.loadStyleConfig();
+
+		assert.deepStrictEqual(
+			style,
+			{ autoCreateClangFormat: false },
+			'loadStyleConfig should read the project style section from .annotation/config.json'
+		);
 	});
 }
 
@@ -246,10 +271,29 @@ function testReconcileWorkspaceAnnotationsDropsStaleNonVirtualEntries() {
 	);
 }
 
+function testResolveAutoCreateClangFormatPrefersExplicitWorkspaceSetting() {
+	assert.strictEqual(
+		resolveAutoCreateClangFormat(false, { workspaceFolderValue: true, workspaceValue: false }),
+		true,
+		'workspace-folder setting should override project config'
+	);
+	assert.strictEqual(
+		resolveAutoCreateClangFormat(false, { workspaceValue: true }),
+		true,
+		'workspace setting should override project config when folder setting is absent'
+	);
+	assert.strictEqual(
+		resolveAutoCreateClangFormat(false, undefined),
+		false,
+		'project config should be used when no explicit VS Code setting is set'
+	);
+}
+
 async function main() {
 	await testInitProjectIgnoresAnnotationNotes();
 	await testInitProjectAddsExactGitignoreRuleEvenWithSimilarEntry();
 	await testLoadEnvConfigMergesChecksDeeply();
+	await testLoadStyleConfigHonorsProjectConfig();
 	testParseGitHubRemoteDoesNotTreatPlainUsernameAsToken();
 	testGdbWarnTrackerClearsPendingSignalOnSessionEnd();
 	testGdbWarnTrackerIgnoresBreakpointHits();
@@ -257,6 +301,7 @@ async function main() {
 	testShadowDiffMapsHeadLinesAfterDeletionAbove();
 	testShadowDiffMapsHeadLinesAfterInsertionAbove();
 	testReconcileWorkspaceAnnotationsDropsStaleNonVirtualEntries();
+	testResolveAutoCreateClangFormatPrefersExplicitWorkspaceSetting();
 	console.log('Unit test passed.');
 }
 
