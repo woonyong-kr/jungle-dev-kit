@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.1] - 2026-05-05
+
+### Fixed
+- **prPanel**: 기존 PR 자동감지 `--jq` 쉘 이스케이프 문제 → JSON 직접 파싱으로 전환
+- **styleEnforcer**: `ColumnLimit: 79` → `0`으로 변경하여 긴 줄 자동 줄바꿈 비활성화
+- **styleEnforcer**: `files.autoSave: afterDelay` 워크스페이스 설정 자동 활성화 추가
+
 ## [0.21.0] - 2026-05-05
 
 ### Fixed

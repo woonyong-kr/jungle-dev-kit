@@ -163,17 +163,15 @@ export class PRPanel {
 			await execAsync ('gh --version', { cwd: root });
 			await execAsync ('gh auth status', { cwd: root });
 			const { stdout } = await execAsync (
-				'gh pr view --json url,title,state --jq \'\"\\(.state)|\\(.url)|\\(.title)\"\'',
+				'gh pr view --json url,title,state',
 				{ cwd: root, timeout: 10000 }
 			);
-			const parts = stdout.trim ().split ('|');
-			if (parts.length >= 2 && parts[0] === 'OPEN') {
-				const prUrl = parts[1];
-				const prTitle = parts.slice (2).join ('|');
+			const pr = JSON.parse (stdout.trim ());
+			if (pr.state === 'OPEN' && pr.url) {
 				panel.webview.postMessage ({
 					command: 'existingPR',
-					url: prUrl,
-					title: prTitle,
+					url: pr.url,
+					title: pr.title || '',
 				});
 			}
 		} catch {

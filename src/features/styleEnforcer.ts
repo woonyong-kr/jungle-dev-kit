@@ -19,7 +19,7 @@ ContinuationIndentWidth: 8
 IndentCaseLabels: false
 IndentGotoLabels: false
 NamespaceIndentation: None
-ColumnLimit: 79
+ColumnLimit: 0
 AlwaysBreakAfterReturnType: TopLevelDefinitions
 AlwaysBreakAfterDefinitionReturnType: TopLevel
 BreakBeforeBraces: Custom
@@ -94,9 +94,17 @@ export class StyleEnforcer {
 			console.log ('[Annotation] 레거시 .jungle-kit/styles/.clang-format 제거');
 		}
 
-		// Ensure formatOnSave is enabled for C/C++ files
-		// Use language-override sections in workspace settings
+		// Ensure autoSave + formatOnSave is enabled for C/C++ files
 		const wsConfig = vscode.workspace.getConfiguration (undefined, null);
+
+		// 자동 저장 활성화
+		const filesConfig = vscode.workspace.getConfiguration ('files');
+		const currentAutoSave = filesConfig.get<string> ('autoSave');
+		if (!currentAutoSave || currentAutoSave === 'off') {
+			await filesConfig.update ('autoSave', 'afterDelay', vscode.ConfigurationTarget.Workspace);
+		}
+
+		// formatOnSave — language-override sections
 		const cOverride = wsConfig.get<Record<string, any>> ('[c]') || {};
 		if (!cOverride['editor.formatOnSave']) {
 			await wsConfig.update ('[c]', { ...cOverride, 'editor.formatOnSave': true },
