@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.25.1] - 2026-05-06
 
 ### Added
 - **goalTracker**: Codex CLI의 `/goal`과 비슷한 장기 작업 목표 고정 기능 추가
