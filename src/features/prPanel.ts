@@ -306,22 +306,26 @@ ${this.truncateDiffSmart (diff || '', PR_DIFF_TRUNCATE_LIMIT)}`,
 		const chunks = diff.split (/(?=^diff --git )/m);
 		if (chunks.length <= 1) { return diff.substring (0, limit); }
 
+		// 1차: 파일당 균등 할당량 계산
+		const perFile = Math.floor (limit / chunks.length);
 		const result: string[] = [];
-		let remaining = limit;
+		let used = 0;
 
 		for (const chunk of chunks) {
-			if (remaining <= 0) { break; }
-			if (chunk.length <= remaining) {
+			if (used >= limit) { break; }
+			if (chunk.length <= perFile) {
+				// 할당량 내에 들어오면 전체 포함
 				result.push (chunk);
-				remaining -= chunk.length;
+				used += chunk.length;
 			} else {
-				// 파일 헤더(처음 5줄)는 보존하고 나머지를 잘라냄
+				// 초과 시 헤더 보존 + body 절삭
 				const lines = chunk.split ('\n');
 				const header = lines.slice (0, 5).join ('\n');
 				const body = lines.slice (5).join ('\n');
-				const allowed = Math.max (remaining - header.length - 30, 0);
-				result.push (header + '\n' + body.substring (0, allowed) + '\n... (truncated)');
-				remaining = 0;
+				const allowed = Math.max (perFile - header.length - 20, 0);
+				const truncated = header + '\n' + body.substring (0, allowed) + '\n... (truncated)';
+				result.push (truncated);
+				used += truncated.length;
 			}
 		}
 
