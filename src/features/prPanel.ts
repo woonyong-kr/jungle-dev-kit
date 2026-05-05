@@ -464,7 +464,15 @@ export class PRPanel {
 			return null;
 		}
 
-		return this.parseGitHubRemote (remoteUrl);
+		const remoteInfo = this.parseGitHubRemote (remoteUrl);
+		if (!remoteInfo) { return null; }
+		if (remoteInfo.token) { return remoteInfo; }
+
+		const credentialToken = await this.getGitCredentialToken (root);
+		return {
+			...remoteInfo,
+			token: credentialToken,
+		};
 	}
 
 	private parseGitHubRemote (remoteUrl: string): GitHubRemoteInfo | null {
@@ -496,6 +504,25 @@ export class PRPanel {
 				repo: sshMatch[2],
 				token: envToken,
 			};
+		} catch {
+			return null;
+		}
+	}
+
+	private async getGitCredentialToken (root: string): Promise<string | null> {
+		try {
+			const { stdout } = await execAsync (
+				"printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill",
+				{ cwd: root, timeout: 10000 }
+			);
+
+			const passwordLine = stdout
+				.split ('\n')
+				.find ((line) => line.startsWith ('password='));
+
+			if (!passwordLine) { return null; }
+			const token = passwordLine.slice ('password='.length).trim ();
+			return token || null;
 		} catch {
 			return null;
 		}

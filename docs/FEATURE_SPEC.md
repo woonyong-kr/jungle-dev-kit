@@ -421,8 +421,8 @@ int main() { return 0; }
 - 각 메시지가 UI에 표시되어야 멈춤/오작동 판별 가능
 
 **엣지 케이스:**
-- `origin` remote가 GitHub HTTPS URL이 아니고 토큰도 없음 → 안내 메시지
-- `GH_TOKEN`/`GITHUB_TOKEN` 또는 remote 토큰이 없으면 → 인증 토큰 안내 메시지
+- `origin` remote가 GitHub URL이 아니고 토큰도 없음 → 안내 메시지
+- `GH_TOKEN`/`GITHUB_TOKEN`, remote 토큰, git credential helper 자격증명이 모두 없으면 → 인증 토큰 안내 메시지
 - base 변경 시 → diff 재계산 (disposed 가드 포함)
 - 패널 닫힘 후 비동기 완료 → 안전하게 무시
 
@@ -598,8 +598,8 @@ int main() { return 0; }
 | C9 | 단축키 전체 확장 (15개) | tagSystem.ts | `DEFAULT_SHORTCUTS` 3개 → 15개 |
 | C10 | 폴더명 .jungle-kit → .annotation + 필터명 jungle-local → annotation-local | 전체 (tagSystem, configManager, package.json 등) | 모든 경로·필터명 참조 변경 + 마이그레이션 로직 |
 | C11 | .gitattributes .gitignore 미등록 | tagSystem.ts | `entriesToAdd`에서 `.gitattributes` 제거 |
-| C12 | 에디터 데코레이션 변경 (보더→배경색) | shadowDiff.ts | 좌측 보더 삭제, hunk 범위 미세 배경색으로 교체 |
-| C13 | PR 기존 오픈 확인 + 진행 메시지 | prPanel.ts | 오픈 PR 감지 → 수정 모드, 각 단계 메시지 표시 |
+| C12 | 에디터 데코레이션 단순화 | shadowDiff.ts | 충돌 줄만 빨간 배경 유지, 노란 전체 배경 제거 |
+| C13 | PR 기존 오픈 확인 + 무인증 API 생성 경로 | prPanel.ts | 오픈 PR 감지, 진행 메시지 표시, gh auth 없이 GitHub API 사용 |
 
 ---
 
