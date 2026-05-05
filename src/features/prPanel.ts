@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
+import * as https from 'https';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { GitUtils } from '../utils/gitUtils';
@@ -11,6 +10,12 @@ import { GoalTracker } from './goalTracker';
 
 const execAsync = promisify (exec);
 const execFileAsync = promisify (execFile);
+
+interface GitHubRemoteInfo {
+	owner: string;
+	repo: string;
+	token: string | null;
+}
 
 function escapeHtml (str: string): string {
 	return str
@@ -174,26 +179,20 @@ export class PRPanel {
 		if (!root) { return; }
 		try {
 			panel.webview.postMessage ({ command: 'status', text: '기존 PR 확인 중...' });
-			await execAsync ('gh --version', { cwd: root });
-			if (!this._panel) { return; }
-			await execAsync ('gh auth status', { cwd: root });
-			if (!this._panel) { return; }
-			const { stdout } = await execAsync (
-				'gh pr view --json url,title,state',
-				{ cwd: root, timeout: 10000 }
-			);
-			if (!this._panel) { return; }
-			const pr = JSON.parse (stdout.trim ());
-			if (pr.state === 'OPEN' && pr.url) {
+			const remoteInfo = await this.resolveGitHubRemote (root);
+			const branch = await this.git.getCurrentBranch ();
+			if (!remoteInfo || !branch) { return; }
+			const existingPr = await this.findExistingPullRequest (remoteInfo, branch);
+			if (!this._panel || !existingPr) { return; }
+			if (existingPr.state === 'open' && existingPr.html_url) {
 				panel.webview.postMessage ({
 					command: 'existingPR',
-					url: pr.url,
-					title: pr.title || '',
+					url: existingPr.html_url,
+					title: existingPr.title || '',
 				});
 			}
 		} catch (err: any) {
-			// gh 미설치·미인증·PR 없음 — 무시하되 로그는 남김
-			console.log ('[Annotation] checkExistingPR skipped:', err?.message || 'gh not available');
+			console.log ('[Annotation] checkExistingPR skipped:', err?.message || 'api not available');
 		}
 	}
 
@@ -357,48 +356,12 @@ export class PRPanel {
 			return;
 		}
 
-		// Check if gh is installed — 없으면 GitHub Releases에서 바이너리 직접 설치
-		try {
-			await execAsync ('gh --version', { cwd: root });
-		} catch {
-			panel.webview.postMessage ({ command: 'status', text: 'GitHub CLI(gh) 설치 중...' });
-			try {
-				const installCmd = [
-					'GH_VERSION=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | grep \'"tag_name"\' | sed \'s/.*"v\\(.*\\)".*/\\1/\')',
-					'curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz -C /tmp',
-					'sudo mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/',
-					'rm -rf "/tmp/gh_${GH_VERSION}_linux_amd64"',
-				].join (' && ');
-				await execAsync (installCmd, { cwd: root, maxBuffer: 10 * 1024 * 1024, timeout: 120000 });
-				await execAsync ('gh --version', { cwd: root });
-				vscode.window.showInformationMessage ('[Annotation] GitHub CLI(gh) 자동 설치 완료');
-			} catch {
-				panel.webview.postMessage ({
-					command: 'error',
-					text: 'gh 자동 설치에 실패했습니다. 터미널에서 수동 설치:\ncurl -fsSL https://api.github.com/repos/cli/cli/releases/latest | grep tag_name 으로 버전 확인 후 바이너리를 다운로드하세요.',
-				});
-				return;
-			}
-		}
-
-		// Check if gh is authenticated
-		try {
-			await execAsync ('gh auth status', { cwd: root });
-		} catch (authErr: any) {
-			panel.webview.postMessage ({
-				command: 'error',
-				text: 'GitHub CLI 인증이 필요합니다. 터미널에서 `gh auth login` 을 실행하세요.',
-			});
-			return;
-		}
-
 		// Check remote exists
-		try {
-			await execAsync ('git remote get-url origin', { cwd: root });
-		} catch {
+		const remoteInfo = await this.resolveGitHubRemote (root);
+		if (!remoteInfo) {
 			panel.webview.postMessage ({
 				command: 'error',
-				text: 'git remote "origin"이 설정되어 있지 않습니다. `git remote add origin <URL>` 로 추가하세요.',
+				text: 'GitHub origin remote를 해석할 수 없습니다. HTTPS origin 또는 GH_TOKEN/GITHUB_TOKEN을 확인하세요.',
 			});
 			return;
 		}
@@ -414,16 +377,10 @@ export class PRPanel {
 			return;
 		}
 
-			try {
-				const safeBranch = branch.replace (/[^a-zA-Z0-9_./-]/g, '');
-				// gh가 설치되어 있으면 credential helper로 등록 (HTTPS 인증 자동 처리)
-				try {
-					await execAsync ('gh auth setup-git', { cwd: root, timeout: 10000 });
-				} catch {
-					void 0;
-				}
-				await execAsync (`git push -u origin ${safeBranch}`, { cwd: root, timeout: 30000 });
-			} catch (pushErr: any) {
+		try {
+			const safeBranch = branch.replace (/[^a-zA-Z0-9_./-]/g, '');
+			await execFileAsync ('git', ['push', '-u', 'origin', safeBranch], { cwd: root, timeout: 30000 });
+		} catch (pushErr: any) {
 			const msg = pushErr.stderr || pushErr.message || '';
 			// "Everything up-to-date" 는 정상 — 이미 푸시된 상태
 			if (!msg.includes ('up-to-date') && !msg.includes ('up to date')) {
@@ -437,29 +394,37 @@ export class PRPanel {
 
 		// Create PR
 		panel.webview.postMessage ({ command: 'status', text: 'PR 생성 중...' });
-		const tempDir = path.join (root, '.annotation');
-		if (!fs.existsSync (tempDir)) {
-			fs.mkdirSync (tempDir, { recursive: true });
-		}
-		const titleFile = path.join (tempDir, 'pr-title-temp.txt');
-		const bodyFile = path.join (tempDir, 'pr-body-temp.md');
 		try {
-			// Write title and body to temp files to avoid all shell injection
-			fs.writeFileSync (titleFile, data.title);
-			fs.writeFileSync (bodyFile, data.body);
+			const title = data.title.trim ();
+			const body = data.body;
+			const safeBase = data.base.replace (/[^a-zA-Z0-9_./-]/g, '');
+			const reviewers = data.reviewers
+				.split (',')
+				.map ((reviewer) => reviewer.trim ())
+				.filter ((reviewer) => /^[a-zA-Z0-9_-]+$/.test (reviewer));
 
-			// execFile 인자 배열 방식으로 shell injection 완전 차단
-			const title = fs.readFileSync (titleFile, 'utf-8').trim ();
-				const safeBase = data.base.replace (/[^a-zA-Z0-9_./-]/g, '');
-
-			const args = ['pr', 'create', '--title', title, '--body-file', bodyFile, '--base', safeBase];
-			if (data.reviewers.trim ()) {
-				const safeReviewers = data.reviewers.trim ().replace (/[^a-zA-Z0-9_\-,]/g, '');
-				args.push ('--reviewer', safeReviewers);
+			const existingPr = await this.findExistingPullRequest (remoteInfo, branch);
+			if (existingPr?.html_url) {
+				panel.webview.postMessage ({
+					command: 'success',
+					text: `이미 열린 PR이 있습니다: ${existingPr.html_url}\n새 커밋을 push하면 PR이 자동 업데이트됩니다.`,
+					url: existingPr.html_url,
+				});
+				return;
 			}
 
-			const { stdout } = await execFileAsync ('gh', args, { cwd: root, timeout: 30000 });
-			const prUrl = stdout.trim ();
+			const createdPr = await this.createPullRequest (remoteInfo, {
+				title,
+				body,
+				head: branch,
+				base: safeBase,
+			});
+
+			if (reviewers.length > 0) {
+				await this.requestPullRequestReviewers (remoteInfo, createdPr.number, reviewers);
+			}
+
+			const prUrl = createdPr.html_url;
 
 			panel.webview.postMessage ({
 				command: 'success',
@@ -472,29 +437,11 @@ export class PRPanel {
 			const stderr = err.stderr || err.message || '';
 			let userMsg = 'PR 생성 실패';
 			if (stderr.includes ('already exists')) {
-				// 기존 PR URL을 조회해서 표시
-				try {
-					const { stdout: prListOut } = await execAsync (
-						'gh pr view --json url --jq .url',
-						{ cwd: root, timeout: 10000 }
-					);
-					const existingUrl = prListOut.trim ();
-					if (existingUrl) {
-						panel.webview.postMessage ({
-							command: 'success',
-							text: `이미 열린 PR이 있습니다: ${existingUrl}\n새 커밋을 push하면 PR이 자동 업데이트됩니다.`,
-							url: existingUrl,
-						});
-						return;
-					}
-					} catch {
-						void 0;
-					}
 				userMsg = '이 브랜치에 이미 열린 PR이 있습니다. 새 커밋을 push하면 자동 반영됩니다.';
-			} else if (stderr.includes ('not a git repository')) {
-				userMsg = '현재 디렉토리가 git 저장소가 아닙니다.';
 			} else if (stderr.includes ('could not find')) {
 				userMsg = `base 브랜치 "${data.base}"를 찾을 수 없습니다. 리모트에 존재하는지 확인하세요.`;
+			} else if (stderr.includes ('Authentication') || stderr.includes ('token')) {
+				userMsg = 'GitHub 인증 토큰을 찾을 수 없습니다. origin remote의 HTTPS 토큰 또는 GH_TOKEN/GITHUB_TOKEN을 확인하세요.';
 			} else {
 				userMsg = `PR 생성 실패: ${stderr.trim ().split ('\n')[0] || err.message}`;
 			}
@@ -502,18 +449,151 @@ export class PRPanel {
 				command: 'error',
 				text: userMsg,
 			});
-		} finally {
-			// Cleanup temp files (성공·실패 모두)
-				if (fs.existsSync (titleFile)) {
-					fs.unlinkSync (titleFile);
-				}
-				if (fs.existsSync (bodyFile)) {
-					fs.unlinkSync (bodyFile);
-				}
-			}
+		}
 		} finally {
 			this._isCreatingPR = false;
 		}
+	}
+
+	private async resolveGitHubRemote (root: string): Promise<GitHubRemoteInfo | null> {
+		let remoteUrl = '';
+		try {
+			const { stdout } = await execAsync ('git remote get-url origin', { cwd: root, timeout: 10000 });
+			remoteUrl = stdout.trim ();
+		} catch {
+			return null;
+		}
+
+		return this.parseGitHubRemote (remoteUrl);
+	}
+
+	private parseGitHubRemote (remoteUrl: string): GitHubRemoteInfo | null {
+		const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || null;
+
+		try {
+			if (remoteUrl.startsWith ('http://') || remoteUrl.startsWith ('https://')) {
+				const parsed = new URL (remoteUrl);
+				if (parsed.hostname !== 'github.com') { return null; }
+				const pathParts = parsed.pathname.replace (/^\//, '').replace (/\.git$/, '').split ('/');
+				if (pathParts.length < 2) { return null; }
+
+				const username = decodeURIComponent (parsed.username || '');
+				const password = decodeURIComponent (parsed.password || '');
+				const remoteToken = password || username || null;
+
+				return {
+					owner: pathParts[0],
+					repo: pathParts[1],
+					token: envToken || remoteToken,
+				};
+			}
+
+			const sshMatch = remoteUrl.match (/^(?:git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+)\/(.+?)(?:\.git)?$/);
+			if (!sshMatch) { return null; }
+
+			return {
+				owner: sshMatch[1],
+				repo: sshMatch[2],
+				token: envToken,
+			};
+		} catch {
+			return null;
+		}
+	}
+
+	private async findExistingPullRequest (
+		remoteInfo: GitHubRemoteInfo,
+		headBranch: string
+	): Promise<{ html_url: string; title: string; state: string } | null> {
+		const response = await this.githubRequest (
+			remoteInfo,
+			'GET',
+			`/repos/${remoteInfo.owner}/${remoteInfo.repo}/pulls?head=${encodeURIComponent (`${remoteInfo.owner}:${headBranch}`)}&state=open`
+		);
+
+		const pullRequests = JSON.parse (response) as Array<{ html_url: string; title: string; state: string }>;
+		return pullRequests[0] || null;
+	}
+
+	private async createPullRequest (
+		remoteInfo: GitHubRemoteInfo,
+		input: { title: string; body: string; head: string; base: string }
+	): Promise<{ html_url: string; number: number }> {
+		const response = await this.githubRequest (
+			remoteInfo,
+			'POST',
+			`/repos/${remoteInfo.owner}/${remoteInfo.repo}/pulls`,
+			{
+				title: input.title,
+				body: input.body,
+				head: input.head,
+				base: input.base,
+			}
+		);
+
+		return JSON.parse (response) as { html_url: string; number: number };
+	}
+
+	private async requestPullRequestReviewers (
+		remoteInfo: GitHubRemoteInfo,
+		prNumber: number,
+		reviewers: string[]
+	): Promise<void> {
+		if (reviewers.length === 0) { return; }
+		await this.githubRequest (
+			remoteInfo,
+			'POST',
+			`/repos/${remoteInfo.owner}/${remoteInfo.repo}/pulls/${prNumber}/requested_reviewers`,
+			{ reviewers }
+		);
+	}
+
+	private async githubRequest (
+		remoteInfo: GitHubRemoteInfo,
+		method: 'GET' | 'POST',
+		apiPath: string,
+		body?: unknown
+	): Promise<string> {
+		if (!remoteInfo.token) {
+			throw new Error ('Authentication token not available');
+		}
+
+		const payload = body ? JSON.stringify (body) : undefined;
+
+		return new Promise<string> ((resolve, reject) => {
+			const request = https.request (
+				{
+					hostname: 'api.github.com',
+					path: apiPath,
+					method,
+					headers: {
+						'Accept': 'application/vnd.github+json',
+						'Authorization': `Bearer ${remoteInfo.token}`,
+						'User-Agent': 'jungle-dev-kit',
+						'X-GitHub-Api-Version': '2022-11-28',
+						...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength (payload) } : {}),
+					},
+				},
+				(response) => {
+					const chunks: Buffer[] = [];
+					response.on ('data', (chunk) => chunks.push (Buffer.isBuffer (chunk) ? chunk : Buffer.from (chunk)));
+					response.on ('end', () => {
+						const responseBody = Buffer.concat (chunks).toString ('utf8');
+						if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+							reject (new Error (responseBody || `GitHub API request failed with status ${response.statusCode}`));
+							return;
+						}
+						resolve (responseBody);
+					});
+				}
+			);
+
+			request.on ('error', reject);
+			if (payload) {
+				request.write (payload);
+			}
+			request.end ();
+		});
 	}
 
 	private getWebviewContent (

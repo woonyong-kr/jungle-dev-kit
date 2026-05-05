@@ -40,7 +40,6 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 	private fetchInterval: NodeJS.Timeout | undefined;
 
 	private conflictDecoration!: vscode.TextEditorDecorationType;
-	private modifiedDecoration!: vscode.TextEditorDecorationType;
 
 	private _onDidChangeCodeLenses = new vscode.EventEmitter<void> ();
 	readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
@@ -265,15 +264,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 			overviewRulerLane: vscode.OverviewRulerLane.Right,
 		});
 
-		// Subtle background: teammate modified nearby area
-		this.modifiedDecoration = vscode.window.createTextEditorDecorationType ({
-			backgroundColor: 'rgba(255, 165, 0, 0.06)',
-			isWholeLine: true,
-			overviewRulerColor: 'rgba(33, 150, 243, 0.4)',
-			overviewRulerLane: vscode.OverviewRulerLane.Right,
-		});
-
-		this.context.subscriptions.push (this.conflictDecoration, this.modifiedDecoration);
+		this.context.subscriptions.push (this.conflictDecoration);
 	}
 
 	private async updateAllDecorations (): Promise<void> {
@@ -287,8 +278,6 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 		const fileChanges = this.branchChanges.filter ((c) => c.file === relativePath);
 
 		const conflictRanges: vscode.DecorationOptions[] = [];
-		const modifiedRanges: vscode.DecorationOptions[] = [];
-
 		// Check which lines in this file are locally modified (working tree + staged)
 		const localModifiedLines = await this.getLocalModifiedLines (relativePath);
 
@@ -313,15 +302,12 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 					// Check if this line is also locally modified
 					if (localModifiedLines.has (line)) {
 						conflictRanges.push (decoration);
-					} else {
-						modifiedRanges.push (decoration);
 					}
 				}
 			}
 		}
 
 		editor.setDecorations (this.conflictDecoration, conflictRanges);
-		editor.setDecorations (this.modifiedDecoration, modifiedRanges);
 	}
 
 	private async getLocalModifiedLines (relativePath: string): Promise<Set<number>> {

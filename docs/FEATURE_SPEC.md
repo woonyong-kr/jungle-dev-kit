@@ -333,12 +333,11 @@ int main() { return 0; }
 
 ### 4.3 에디터 데코레이션 — 변경 (변경사항 C12)
 
-**변경:** 좌측 보더(세로선) → 미세 배경색으로 교체
-- `conflictDecoration`, `modifiedDecoration`의 `borderLeft` 스타일 삭제
-- 대신 hunk 범위 전체에 미세한 배경색 적용 (예: `rgba(255, 165, 0, 0.06)`)
-- `updateEditorDecorations` 메서드는 배경색 적용 로직으로 유지
-- `getLocalModifiedLines` 메서드 삭제 (원격 diff 기반만 사용)
-- `createDecorations` 메서드를 배경색 전용으로 재작성
+**현재 동작:**
+- `conflictDecoration`만 유지
+- 로컬에서도 수정된 줄만 빨간 배경으로 표시
+- 변경 영역 전체를 노란 배경으로 칠하던 `modifiedDecoration`은 제거
+- `updateEditorDecorations` 메서드는 충돌 가능 줄만 장식
 
 ### 4.4 CodeLens (유지)
 
@@ -403,13 +402,14 @@ int main() { return 0; }
 
 **정상 동작:**
 1. WebView 패널 열림
-2. **기존 오픈 PR 확인** — `gh pr view` 실행하여 현재 브랜치에 열린 PR 존재 여부 확인
+2. **기존 오픈 PR 확인** — GitHub REST API로 현재 브랜치에 열린 PR 존재 여부 확인
    - 열린 PR이 있으면 → PR 정보(제목, URL, 상태)를 패널에 표시 + "이미 열린 PR이 있습니다" 안내 + 수정 모드로 전환
    - 없으면 → 새 PR 생성 모드
 3. base 브랜치 선택 (드롭다운)
 4. 변경 파일 목록 + diff 표시
 5. AI로 제목/본문 자동 생성
-6. "PR 만들기" / "PR 수정" → `gh pr create` 또는 `gh pr edit` 실행
+6. "PR 만들기" → GitHub REST API로 PR 생성
+7. reviewer가 있으면 생성 직후 reviewer 요청 API 호출
 7. 성공 시 PR URL 표시
 
 **각 단계별 진행 메시지 표시:**
@@ -417,11 +417,12 @@ int main() { return 0; }
 - "변경 파일 분석 중..."
 - "AI로 PR 내용 생성 중..."
 - "커밋 푸시 중..."
-- "PR 생성 중..." / "PR 수정 중..."
+- "PR 생성 중..."
 - 각 메시지가 UI에 표시되어야 멈춤/오작동 판별 가능
 
 **엣지 케이스:**
-- `gh` CLI 미설치 → 안내 메시지
+- `origin` remote가 GitHub HTTPS URL이 아니고 토큰도 없음 → 안내 메시지
+- `GH_TOKEN`/`GITHUB_TOKEN` 또는 remote 토큰이 없으면 → 인증 토큰 안내 메시지
 - base 변경 시 → diff 재계산 (disposed 가드 포함)
 - 패널 닫힘 후 비동기 완료 → 안전하게 무시
 
