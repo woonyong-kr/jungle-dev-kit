@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.24.0] - 2026-05-05
+
+### Added
+- **tagSystem**: `@note` 태그 타입 추가 — 개인 메모용 (사이드바 미표시, git diff 제외)
+- **apiKeyManager**: 환경변수 `OPENAI_API_KEY` 폴백 지원 (SecretStorage → env var 순서)
+- **tagSystem**: 기본 단축키 15개 확장 (네비게이션·태그 관리·개별 태그·git 단축키)
+- **prPanel**: PR 생성 진행 상태 메시지 3단계 (`기존 PR 확인 중` → `변경 파일 분석 중` → `AI로 PR 내용 생성 중`)
+
+### Changed
+- **configManager/tagSystem**: 설정 폴더 `.jungle-kit` → `.annotation` 마이그레이션 (자동 감지·이동·레거시 삭제)
+- **tagSystem**: git clean filter 이름 `jungle-local` → `annotation-local` (레거시 자동 제거)
+- **tagSystem**: TreeView 접기/펼치기 토글 (`_allCollapsed` 상태 기반)
+- **tagSystem**: `maxResults` 파일 스캔 제한 제거 — 전체 워크스페이스 태그 수집
+- **shadowDiff**: 배경 장식을 세로선(borderLeft)에서 미세 배경색(backgroundColor)으로 변경
+- **styleEnforcer**: `.clang-format` 항상 최신 내용으로 덮어쓰기 (가드 제거)
+- **styleEnforcer**: `editor.formatOnSave` 무조건 설정 (조건부 가드 제거)
+- **configManager**: 미사용 설정 필드 제거 (`project`, `autoFix`, `clangFormatContent`)
+
+### Security
+- **shadowDiff**: 모든 shell 호출을 `execFileAsync` 인자 배열로 전환 — shell injection 완전 차단
+
+## [0.23.1] - 2026-05-05
+
+### Security
+- **prPanel**: PR 생성 명령을 `execFile` 인자 배열로 전환하여 shell injection 방지
+- **styleEnforcer**: clang-format 호출을 `execFile`로 전환
+
+### Fixed
+- **tagSystem**: git clean filter를 bash/sed/awk에서 Node.js로 완전 재작성 — macOS/Windows/Linux 크로스 플랫폼 지원
+- **tagSystem**: `.gitattributes` 중복/레거시 엔트리 자동 정리 로직 추가
+- **tagSystem**: `saveAnnotations()` 원자적 쓰기 (`.tmp` + `renameSync`)
+- **tagSystem**: `generateId()` 밀리초 충돌 방지 카운터 추가
+- **tagSystem**: 단축키 패널 재열기 시 HTML 갱신 후 reveal
+- **tagSystem**: `loadShortcutSettings()` 파일 손상 시 기본값 3개 항목 반환
+- **configManager**: `configDir` 정적 필드 → `getConfigDir()` 동적 getter 전환 (멀티루트/폴더 변경 대응)
+- **prPanel**: `changeBase` 핸들러에 disposed 가드 추가 (await 후 패널 닫힘 대응)
+- **shadowDiff**: `pullAndPush()`에 root 빈문자열 가드 추가
+- **shadowDiff**: `fetchAndAnalyze()` 뮤텍스 추가 (중복 실행 방지)
+- **gitUtils**: `run()` 메서드에 timeout 파라미터 추가 (기본 30초)
+- **gitUtils**: `getDiffAgainst()` 빈 base 가드 추가
+
+### Changed
+- **styleEnforcer**: clang-format 바이너리를 npm 패키지로 번들 — 시스템 설치 불필요
+- **styleEnforcer**: `.clang-format` 파일이 없을 때만 생성 (사용자 커스텀 보존)
+- **styleEnforcer**: 레거시 `.jungle-kit/styles/.clang-format` 자동 마이그레이션
+- **tagSystem**: 이전 bash 스크립트 (`clean-local.sh`, `smudge-local.sh`) 자동 제거
+- **tagSystem**: 이전 필터명 (`junglekit-local`) git config에서 자동 제거
+
 ## [0.22.1] - 2026-05-05
 
 ### Fixed

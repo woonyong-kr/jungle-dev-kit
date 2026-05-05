@@ -27,7 +27,7 @@ function escapeHtml (str: string): string {
  * Features:
  * - AI-generated PR title and body from staged diff
  * - Collects @review tags from tags.json
- * - Reviewer selection from .jungle-kit/team.json
+ * - Reviewer selection from .annotation/team.json
  * - One-click PR creation via `gh` CLI
  */
 export class PRPanel {
@@ -170,6 +170,7 @@ export class PRPanel {
 		const root = this.config.getWorkspaceRoot ();
 		if (!root) { return; }
 		try {
+			panel.webview.postMessage ({ command: 'status', text: '기존 PR 확인 중...' });
 			await execAsync ('gh --version', { cwd: root });
 			if (!this._panel) { return; }
 			await execAsync ('gh auth status', { cwd: root });
@@ -238,6 +239,7 @@ export class PRPanel {
 				.get<string> ('ai.model', 'gpt-4o-mini');
 
 			// 컨텍스트 구성
+			panel.webview.postMessage ({ command: 'status', text: '변경 파일 분석 중...' });
 			const filesSummary = changedFiles
 				.map ((f) => `  ${f.path} (+${f.additions} -${f.deletions})`)
 				.join ('\n');
@@ -250,6 +252,7 @@ export class PRPanel {
 				? reviewTags.map ((t) => `  ${t.file}:${t.line + 1} — ${t.content}`).join ('\n')
 				: '  없음';
 
+			panel.webview.postMessage ({ command: 'status', text: 'AI로 PR 내용 생성 중...' });
 			const response = await client.chat.completions.create ({
 				model,
 				temperature: 0.3,
@@ -388,7 +391,7 @@ ${(diff || '').substring (0, PR_DIFF_TRUNCATE_LIMIT)}`,
 
 		// Create PR
 		panel.webview.postMessage ({ command: 'status', text: 'PR 생성 중...' });
-		const tempDir = path.join (root, '.jungle-kit');
+		const tempDir = path.join (root, '.annotation');
 		if (!fs.existsSync (tempDir)) {
 			fs.mkdirSync (tempDir, { recursive: true });
 		}

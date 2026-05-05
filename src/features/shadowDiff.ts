@@ -1,10 +1,9 @@
 import * as vscode from 'vscode';
-import { exec, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { GitUtils, sanitizeRef } from '../utils/gitUtils';
-import { ConfigManager, DIFF_FILE_EXTENSIONS } from '../utils/configManager';
+import { ConfigManager } from '../utils/configManager';
 
-const execAsync = promisify (exec);
 const execFileAsync = promisify (execFile);
 
 const MAX_BUFFER = 5 * 1024 * 1024; // 5 MB
@@ -105,7 +104,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 						const root = this.config.getWorkspaceRoot ();
 						if (!root) { throw new Error ('워크스페이스가 열려있지 않습니다.'); }
 						try {
-							await execAsync ('git pull --rebase', { cwd: root, maxBuffer: MAX_BUFFER, timeout: 60000 });
+							await execFileAsync ('git', ['pull', '--rebase'], { cwd: root, maxBuffer: MAX_BUFFER, timeout: 60000 });
 						} catch (pullErr: any) {
 							const msg = pullErr.stderr || pullErr.message || '';
 							if (msg.includes ('CONFLICT') || msg.includes ('conflict')) {
@@ -125,7 +124,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 					async () => {
 						const root = this.config.getWorkspaceRoot ();
 						if (!root) { throw new Error ('워크스페이스가 열려있지 않습니다.'); }
-						await execAsync (`git push origin ${sanitizeRef (branch)}`, { cwd: root, maxBuffer: MAX_BUFFER, timeout: 60000 });
+						await execFileAsync ('git', ['push', 'origin', sanitizeRef (branch)], { cwd: root, maxBuffer: MAX_BUFFER, timeout: 60000 });
 					}
 				);
 				vscode.window.showInformationMessage ('Push 완료');
@@ -175,23 +174,23 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 		for (const remoteBranch of remoteBranches) {
 			try {
 				// Get diff between current branch and remote branch (only C/H files)
-				const { stdout: diffOutput } = await execAsync (
-					`git diff ${sanitizeRef (currentBranch)}...${sanitizeRef (remoteBranch)} -- ${DIFF_FILE_EXTENSIONS} 2>/dev/null`,
+				const { stdout: diffOutput } = await execFileAsync (
+					'git', ['diff', `${sanitizeRef (currentBranch)}...${sanitizeRef (remoteBranch)}`, '--', '*.c', '*.h'],
 					{ cwd: root, maxBuffer: MAX_BUFFER }
 				);
 
 				if (!diffOutput.trim ()) {continue;}
 
 				// Get author of the branch
-				const { stdout: authorOutput } = await execAsync (
-					`git log ${sanitizeRef (remoteBranch)} -1 --format="%an"`,
+				const { stdout: authorOutput } = await execFileAsync (
+					'git', ['log', sanitizeRef (remoteBranch), '-1', '--format=%an'],
 					{ cwd: root }
 				);
 				const author = authorOutput.trim ();
 
 				// Get last commit date
-				const { stdout: dateOutput } = await execAsync (
-					`git log ${sanitizeRef (remoteBranch)} -1 --format="%ar"`,
+				const { stdout: dateOutput } = await execFileAsync (
+					'git', ['log', sanitizeRef (remoteBranch), '-1', '--format=%ar'],
 					{ cwd: root }
 				);
 
@@ -258,21 +257,17 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 	// --- Decorations ---
 
 	private createDecorations (): void {
-		// Red border: conflict possible (same lines modified locally and remotely)
+		// Subtle background: conflict possible (same lines modified locally and remotely)
 		this.conflictDecoration = vscode.window.createTextEditorDecorationType ({
-			borderWidth: '0 0 0 3px',
-			borderStyle: 'solid',
-			borderColor: '#F44336',
+			backgroundColor: 'rgba(244, 67, 54, 0.06)',
 			isWholeLine: true,
 			overviewRulerColor: 'rgba(244, 67, 54, 0.6)',
 			overviewRulerLane: vscode.OverviewRulerLane.Right,
 		});
 
-		// Blue border: teammate modified nearby area
+		// Subtle background: teammate modified nearby area
 		this.modifiedDecoration = vscode.window.createTextEditorDecorationType ({
-			borderWidth: '0 0 0 3px',
-			borderStyle: 'solid',
-			borderColor: '#2196F3',
+			backgroundColor: 'rgba(255, 165, 0, 0.06)',
 			isWholeLine: true,
 			overviewRulerColor: 'rgba(33, 150, 243, 0.4)',
 			overviewRulerLane: vscode.OverviewRulerLane.Right,

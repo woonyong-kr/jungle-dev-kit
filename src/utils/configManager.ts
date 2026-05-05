@@ -12,7 +12,6 @@ export const AI_DIFF_TRUNCATE_LIMIT = 4000;
 export const PR_DIFF_TRUNCATE_LIMIT = 6000;
 
 export interface JungleKitConfig {
-	project: 'pintos' | 'xv6' | 'custom';
 	convention: ConventionConfig;
 	env: EnvConfig;
 	style: StyleConfig;
@@ -29,13 +28,11 @@ export interface ConventionConfig {
 
 export interface EnvConfig {
 	checks: Record<string, boolean>;
-	autoFix: boolean;
 	showOnStartup: boolean;
 }
 
 export interface StyleConfig {
 	autoCreateClangFormat: boolean;
-	clangFormatContent: string;
 }
 
 const DEFAULT_CONVENTION: ConventionConfig = {
@@ -56,7 +53,6 @@ const DEFAULT_ENV: EnvConfig = {
 		'clang-format': true,
 		extensions: true,
 	},
-	autoFix: true,
 	showOnStartup: true,
 };
 
@@ -70,7 +66,7 @@ export class ConfigManager {
 	/** 워크스페이스 변경 시에도 항상 최신 경로를 반환 */
 	getConfigDir (): string {
 		const root = this.getWorkspaceRoot ();
-		return root ? path.join (root, '.jungle-kit') : '';
+		return root ? path.join (root, '.annotation') : '';
 	}
 
 	getWorkspaceRoot (): string {
@@ -92,12 +88,10 @@ export class ConfigManager {
 			const configPath = path.join (this.getConfigDir (), 'config.json');
 			if (!fs.existsSync (configPath)) {
 				const config: JungleKitConfig = {
-					project: 'pintos',
 					convention: DEFAULT_CONVENTION,
 					env: DEFAULT_ENV,
 					style: {
 						autoCreateClangFormat: true,
-						clangFormatContent: '',
 					},
 				};
 				fs.writeFileSync (configPath, JSON.stringify (config, null, 2));
@@ -115,7 +109,7 @@ export class ConfigManager {
 			// Add notes to .gitignore (local-only)
 			await this.ensureGitignoreEntry ('notes/');
 
-			console.log ('[Annotation] initialized: .jungle-kit/ created');
+			console.log ('[Annotation] initialized: .annotation/ created');
 		} catch (err: any) {
 			vscode.window.showErrorMessage (`[Annotation] 프로젝트 초기화 실패: ${err.message || err}`);
 		}

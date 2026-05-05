@@ -98,11 +98,8 @@ export class StyleEnforcer {
 
 		if (vscodeSetting.get<boolean> ('style.autoCreateClangFormat', true)) {
 			try {
-				// 파일이 없을 때만 생성 — 사용자 커스텀 설정을 보존
-				if (!fs.existsSync (clangFormatPath)) {
-					fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
-					console.log ('[Annotation] .clang-format 생성 (워크스페이스 루트)');
-				}
+				fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
+				console.log ('[Annotation] .clang-format 적용 (워크스페이스 루트)');
 			} catch (err) {
 				console.warn ('[Annotation] .clang-format 쓰기 실패 (읽기 전용 파일시스템?):', err);
 			}
@@ -125,17 +122,13 @@ export class StyleEnforcer {
 			await filesConfig.update ('autoSave', 'afterDelay', vscode.ConfigurationTarget.Workspace);
 		}
 
-		// formatOnSave — language-override sections
+		// formatOnSave — language-override sections (무조건 설정)
 		const cOverride = wsConfig.get<Record<string, any>> ('[c]') || {};
-		if (!cOverride['editor.formatOnSave']) {
-			await wsConfig.update ('[c]', { ...cOverride, 'editor.formatOnSave': true },
-				vscode.ConfigurationTarget.Workspace);
-		}
+		await wsConfig.update ('[c]', { ...cOverride, 'editor.formatOnSave': true },
+			vscode.ConfigurationTarget.Workspace);
 		const cppOverride = wsConfig.get<Record<string, any>> ('[cpp]') || {};
-		if (!cppOverride['editor.formatOnSave']) {
-			await wsConfig.update ('[cpp]', { ...cppOverride, 'editor.formatOnSave': true },
-				vscode.ConfigurationTarget.Workspace);
-		}
+		await wsConfig.update ('[cpp]', { ...cppOverride, 'editor.formatOnSave': true },
+			vscode.ConfigurationTarget.Workspace);
 
 		// Watch for file saves to run style check
 		context.subscriptions.push (

@@ -14,7 +14,6 @@ export interface DiffFile {
 	path: string;
 	additions: number;
 	deletions: number;
-	status: 'A' | 'M' | 'D' | 'R';
 }
 
 export class GitUtils {
@@ -164,7 +163,6 @@ export class GitUtils {
 					path: filePath || '',
 					additions: parseInt (parts[0]) || 0,
 					deletions: parseInt (parts[1]) || 0,
-					status: 'M' as const,
 				};
 			})
 			.filter ((f) => f.path.length > 0);

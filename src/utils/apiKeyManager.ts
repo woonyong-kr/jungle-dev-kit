@@ -15,7 +15,10 @@ export class APIKeyManager {
 	}
 
 	async getKey (): Promise<string | undefined> {
-		return this.secrets.get (SECRET_KEY);
+		// 우선순위: 1. SecretStorage → 2. 환경변수
+		const stored = await this.secrets.get (SECRET_KEY);
+		if (stored) {return stored;}
+		return process.env.OPENAI_API_KEY || undefined;
 	}
 
 	async setKey (): Promise<void> {

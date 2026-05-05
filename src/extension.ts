@@ -66,7 +66,7 @@ export async function activate (context: vscode.ExtensionContext) {
 		['jungleKit.refreshTags', () => tagSystem.refresh ()],
 		['jungleKit.toggleTagView', () => tagSystem.toggleView ()],
 		['jungleKit.clearAllTags', () => tagSystem.clearAllAnnotations ()],
-		['jungleKit.collapseTags', () => vscode.commands.executeCommand ('workbench.actions.treeView.jungleKit.tags.collapseAll')],
+		['jungleKit.collapseTags', () => tagSystem.toggleCollapse ()],
 		['jungleKit.nextTag', () => tagSystem.navigateTag ('next')],
 		['jungleKit.prevTag', () => tagSystem.navigateTag ('prev')],
 		['jungleKit.deleteAnnotationAtCursor', () => tagSystem.deleteAnnotationAtCursor ()],
