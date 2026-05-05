@@ -7,7 +7,7 @@ const MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
 
 /** shell 인자에 사용 가능한 안전한 git ref 문자만 허용 */
 export function sanitizeRef (ref: string): string {
-	return ref.replace (/[^a-zA-Z0-9_\-\/.~^@{}]/g, '');
+	return ref.replace (/[^a-zA-Z0-9_./~^@{}-]/g, '');
 }
 
 export interface DiffFile {

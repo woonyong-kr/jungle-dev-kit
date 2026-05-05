@@ -6,6 +6,7 @@ import { promisify } from 'util';
 import { ConfigManager, DIFF_FILE_EXTENSIONS } from '../utils/configManager';
 import { sanitizeRef } from '../utils/gitUtils';
 import { APIKeyManager } from '../utils/apiKeyManager';
+import { GoalTracker } from './goalTracker';
 
 const execAsync = promisify (execCb);
 
@@ -128,6 +129,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 	private config: ConfigManager;
 	private apiKeys: APIKeyManager | null = null;
+	private goalTracker: GoalTracker | null = null;
 	private context!: vscode.ExtensionContext;
 	private annotations: Annotation[] = [];
 	private dataFilePath: string = '';
@@ -144,9 +146,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private _onDidChangeTreeData = new vscode.EventEmitter<TagTreeItem | undefined> ();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-	constructor (config: ConfigManager, apiKeys?: APIKeyManager) {
+	constructor (config: ConfigManager, apiKeys?: APIKeyManager, goalTracker?: GoalTracker) {
 		this.config = config;
 		this.apiKeys = apiKeys || null;
+		this.goalTracker = goalTracker || null;
 	}
 
 	setTreeView (treeView: vscode.TreeView<TagTreeItem>, _context: vscode.ExtensionContext): void {
@@ -288,7 +291,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					fs.renameSync (src, dst);
 				}
 			}
-			try { fs.rmSync (legacyDir, { recursive: true }); } catch {}
+			fs.rmSync (legacyDir, { recursive: true, force: true });
 		}
 
 		// 프로젝트 루트 .gitignore — 익스텐션 생성 파일 자동 제외
@@ -968,7 +971,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 
 			const relativePath = vscode.workspace.asRelativePath (editor.document.uri);
-			let tags = allTags.filter ((a) => a.file === relativePath);
+				const tags = allTags.filter ((a) => a.file === relativePath);
 
 			if (tags.length === 0) {
 				vscode.window.showInformationMessage ('현재 파일에 태그가 없습니다.');
@@ -2034,6 +2037,15 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			let OpenAI: any;
 			try { OpenAI = (await import ('openai')).default; } catch { return ''; }
 			const client = new OpenAI ({ apiKey: key });
+			const goalContext = this.goalTracker?.getGoalPromptContext ();
+			const userPrompt = [
+				goalContext,
+				`파일: ${add.file}`,
+				`새로 추가된 코드:\n${add.code}`,
+				`주변 코드:\n${context}`,
+			]
+				.filter ((section) => section && section.trim ().length > 0)
+				.join ('\n\n');
 
 			const response = await client.chat.completions.create ({
 				model,
@@ -2046,7 +2058,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					},
 					{
 						role: 'user',
-						content: `파일: ${add.file}\n새로 추가된 코드:\n${add.code}\n\n주변 코드:\n${context}`,
+						content: userPrompt,
 					},
 				],
 				max_tokens: 100,
@@ -2187,15 +2199,15 @@ process.stdin.on('end', () => {
 			await execFileP ('git', ['config', `filter.${filterName}.smudge`, smudgeCmd], { cwd: root });
 
 			// 레거시 필터 및 스크립트 정리
-			try { await execFileP ('git', ['config', '--unset', 'filter.junglekit-local.clean'], { cwd: root }); } catch { /* 없으면 무시 */ }
-			try { await execFileP ('git', ['config', '--unset', 'filter.junglekit-local.smudge'], { cwd: root }); } catch { /* 없으면 무시 */ }
-			try { await execFileP ('git', ['config', '--unset', 'filter.jungle-local.clean'], { cwd: root }); } catch { /* 없으면 무시 */ }
-			try { await execFileP ('git', ['config', '--unset', 'filter.jungle-local.smudge'], { cwd: root }); } catch { /* 없으면 무시 */ }
+			try { await execFileP ('git', ['config', '--unset', 'filter.junglekit-local.clean'], { cwd: root }); } catch { void 0; }
+			try { await execFileP ('git', ['config', '--unset', 'filter.junglekit-local.smudge'], { cwd: root }); } catch { void 0; }
+			try { await execFileP ('git', ['config', '--unset', 'filter.jungle-local.clean'], { cwd: root }); } catch { void 0; }
+			try { await execFileP ('git', ['config', '--unset', 'filter.jungle-local.smudge'], { cwd: root }); } catch { void 0; }
 			// 이전 bash 스크립트 파일 제거
 			const legacySh = path.join (scriptsDir, 'clean-local.sh');
-			if (fs.existsSync (legacySh)) { try { fs.unlinkSync (legacySh); } catch {} }
+			if (fs.existsSync (legacySh)) { fs.rmSync (legacySh, { force: true }); }
 			const legacySmudge = path.join (scriptsDir, 'smudge-local.sh');
-			if (fs.existsSync (legacySmudge)) { try { fs.unlinkSync (legacySmudge); } catch {} }
+			if (fs.existsSync (legacySmudge)) { fs.rmSync (legacySmudge, { force: true }); }
 
 			// .gitattributes 정리 — 중복/레거시 엔트리 제거 후 정규화
 			const gaPath = path.join (root, '.gitattributes');
@@ -2753,7 +2765,7 @@ process.stdin.on('end', () => {
           html += '</td>';
         } else {
           html += '<td><span class="key-badge">' + renderKeyBadge(key) + '</span></td>';
-          html += '<td class="col-edit"><button class="btn-edit" onclick="startEdit(\'' + esc(s.id) + '\')" title="수정">&#x270E;</button></td>';
+	          html += '<td class="col-edit"><button class="btn-edit" onclick="startEdit(&quot;' + esc(s.id) + '&quot;)" title="수정">&#x270E;</button></td>';
         }
         html += '</tr>';
       });
@@ -2951,10 +2963,14 @@ process.stdin.on('end', () => {
 			if (!fs.existsSync (configDir)) {
 				fs.mkdirSync (configDir, { recursive: true });
 			}
-			// 기존 파일 백업
-			if (fs.existsSync (keybindingsPath)) {
-				try { fs.copyFileSync (keybindingsPath, keybindingsPath + '.backup'); } catch {}
-			}
+				// 기존 파일 백업
+				if (fs.existsSync (keybindingsPath)) {
+					try {
+						fs.copyFileSync (keybindingsPath, keybindingsPath + '.backup');
+					} catch (err) {
+						console.warn ('[Annotation] keybindings 백업 실패:', err);
+					}
+				}
 			const tmpPath = keybindingsPath + '.tmp';
 			fs.writeFileSync (tmpPath, content);
 			fs.renameSync (tmpPath, keybindingsPath);

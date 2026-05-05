@@ -36,7 +36,8 @@
     "workspaceContains:**/Makefile.build",
     "workspaceContains:**/Makefile",
     "workspaceContains:**/*.c",
-    "workspaceContains:.jungle-kit/config.json",
+    "workspaceContains:**/*.h",
+    "workspaceContains:.annotation/config.json",
     "onCommand:jungleKit.init"
   ],
   "main": "./out/extension.js",
@@ -100,6 +101,22 @@
       {
         "command": "jungleKit.undoLastCommit",
         "title": "마지막 커밋 되돌리기"
+      },
+      {
+        "command": "jungleKit.setGoal",
+        "title": "Goal 설정"
+      },
+      {
+        "command": "jungleKit.showGoal",
+        "title": "Goal 보기"
+      },
+      {
+        "command": "jungleKit.completeGoal",
+        "title": "Goal 완료 처리"
+      },
+      {
+        "command": "jungleKit.clearGoal",
+        "title": "Goal 삭제"
       },
       {
         "command": "jungleKit.resolveTagInline",
@@ -239,18 +256,28 @@
         "jungleKit.style.autoCreateClangFormat": {
           "type": "boolean",
           "default": true,
-          "description": "Auto-create .clang-format in .jungle-kit/styles/ if missing"
+          "description": "Auto-create .clang-format in the workspace root if missing"
         },
         "jungleKit.sync.intervalMinutes": {
           "type": "number",
           "default": 5,
           "description": "Background fetch interval in minutes (Shadow Diff)"
         },
-"jungleKit.ai.model": {
+        "jungleKit.ai.model": {
           "type": "string",
           "default": "gpt-4o-mini",
           "enum": ["gpt-4o", "gpt-4o-mini"],
           "description": "OpenAI model for AI features"
+        },
+        "jungleKit.goal.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the active Goal in the status bar"
+        },
+        "jungleKit.goal.includeInAI": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include the active Goal in AI commit, PR, and review prompts"
         }
       }
     },
@@ -334,6 +361,11 @@
           "group": "actions@1"
         },
         {
+          "command": "jungleKit.showGoal",
+          "when": "view == jungleKit.tags",
+          "group": "actions@1.5"
+        },
+        {
           "command": "jungleKit.generateCommitMessage",
           "when": "view == jungleKit.tags",
           "group": "actions@2"
@@ -378,7 +410,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js",
+    "test": "npm run compile && node ./scripts/smoke-test.js",
     "package": "vsce package",
     "publish": "vsce publish"
   },

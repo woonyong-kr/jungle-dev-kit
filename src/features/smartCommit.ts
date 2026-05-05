@@ -2,16 +2,19 @@ import * as vscode from 'vscode';
 import { ConfigManager, AI_DIFF_TRUNCATE_LIMIT } from '../utils/configManager';
 import { APIKeyManager } from '../utils/apiKeyManager';
 import { GitUtils } from '../utils/gitUtils';
+import { GoalTracker } from './goalTracker';
 
 export class SmartCommit {
 	private config: ConfigManager;
 	private apiKeys: APIKeyManager;
 	private git: GitUtils;
+	private goalTracker: GoalTracker | null;
 
-	constructor (config: ConfigManager, apiKeys: APIKeyManager, git: GitUtils) {
+	constructor (config: ConfigManager, apiKeys: APIKeyManager, git: GitUtils, goalTracker?: GoalTracker) {
 		this.config = config;
 		this.apiKeys = apiKeys;
 		this.git = git;
+		this.goalTracker = goalTracker || null;
 	}
 
 	async generate (): Promise<void> {
@@ -53,6 +56,10 @@ export class SmartCommit {
 		const trimmedDiff = diff.length > AI_DIFF_TRUNCATE_LIMIT
 			? diff.substring (0, AI_DIFF_TRUNCATE_LIMIT) + '\n... (truncated)'
 			: diff;
+		const goalContext = this.goalTracker?.getGoalPromptContext ();
+		const userPrompt = goalContext
+			? `${goalContext}\n\n=== Staged Diff ===\n${trimmedDiff}`
+			: trimmedDiff;
 
 		let OpenAI: any;
 		try {
@@ -66,7 +73,7 @@ export class SmartCommit {
 			model,
 			messages: [
 				{ role: 'system', content: this.config.loadConventionFile ('commit-convention.md') },
-				{ role: 'user', content: trimmedDiff },
+				{ role: 'user', content: userPrompt },
 			],
 			temperature: 0.3,
 			max_tokens: 500,

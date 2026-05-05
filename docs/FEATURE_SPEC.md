@@ -222,7 +222,53 @@ int main() { return 0; }
 
 ---
 
-## 3. 단축키 설정 (configureShortcuts) — 변경사항 C9
+## 3. Goal 시스템 (goalTracker.ts)
+
+### 3.1 목적
+
+- 장기 작업 목표를 워크스페이스 로컬 상태로 고정
+- 사용자가 현재 세션의 "끝까지 가져갈 목표"를 잊지 않게 유지
+- AI 기능(커밋 메시지, PR 생성, 리뷰 설명)에 동일한 목표 맥락 전달
+
+### 3.2 저장 위치
+
+- `.annotation/goal.json`
+- `.annotation/.gitignore`에 `goal.json` 자동 추가
+- git 커밋 대상 제외
+
+### 3.3 명령
+
+| 명령 | ID | 정상 동작 |
+|------|----|-----------|
+| Goal 설정 | `jungleKit.setGoal` | 목표 텍스트 + 완료 기준 입력 후 활성 Goal 저장 |
+| Goal 보기 | `jungleKit.showGoal` | 현재 Goal 확인 후 수정/복사/완료/삭제 |
+| Goal 완료 처리 | `jungleKit.completeGoal` | 활성 Goal을 완료 상태로 history에 이동 |
+| Goal 삭제 | `jungleKit.clearGoal` | 활성 Goal 제거 |
+
+### 3.4 상태바
+
+- 활성 Goal이 있으면 좌측 상태바에 `$(target)` + Goal 요약 표시
+- Goal이 없으면 `Goal 설정` 표시
+- 클릭 시 `Goal 보기` 명령 실행
+- `jungleKit.goal.showStatusBar = false`면 숨김
+
+### 3.5 AI 연동
+
+- `jungleKit.goal.includeInAI = true`일 때만 활성 Goal을 프롬프트에 포함
+- 적용 대상:
+  - Smart Commit
+  - PR Panel AI 생성
+  - Auto Review AI 설명 생성
+
+### 3.6 완료 처리
+
+- 완료 시 `current`는 `null`
+- 완료된 Goal은 `history` 앞쪽에 최대 20개 유지
+- 완료 직후 "새 Goal 설정" 액션 제공
+
+---
+
+## 4. 단축키 설정 (configureShortcuts) — 변경사항 C9
 
 ### 3.1 WebView 패널
 
@@ -268,7 +314,7 @@ int main() { return 0; }
 
 ---
 
-## 4. Shadow Diff (shadowDiff.ts)
+## 5. Shadow Diff (shadowDiff.ts)
 
 ### 4.1 백그라운드 fetch
 
@@ -319,7 +365,7 @@ int main() { return 0; }
 
 ---
 
-## 5. AI 기능
+## 6. AI 기능
 
 ### 5.1 공통: API 키 관리 — 변경사항 C3
 
@@ -389,7 +435,7 @@ int main() { return 0; }
 
 ---
 
-## 6. 코딩 스타일 (styleEnforcer.ts)
+## 7. 코딩 스타일 (styleEnforcer.ts)
 
 ### 6.1 .clang-format 관리 — 변경사항 C4
 
@@ -422,7 +468,7 @@ int main() { return 0; }
 
 ---
 
-## 7. 환경 검증 (environmentValidator.ts)
+## 8. 환경 검증 (environmentValidator.ts)
 
 ### 7.1 검증 항목
 
@@ -443,7 +489,7 @@ int main() { return 0; }
 
 ---
 
-## 8. 프로젝트 초기화 (init) — 변경사항 C10
+## 9. 프로젝트 초기화 (init) — 변경사항 C10
 
 **변경: 폴더명 `.jungle-kit/` → `.annotation/`**
 
@@ -467,7 +513,7 @@ int main() { return 0; }
 
 ---
 
-## 9. Git 유틸리티
+## 10. Git 유틸리티
 
 ### 9.1 마지막 커밋 되돌리기 (undoLastCommit)
 
@@ -479,7 +525,7 @@ int main() { return 0; }
 
 ---
 
-## 10. 데이터 저장
+## 11. 데이터 저장
 
 ### 10.1 annotations.json
 
@@ -499,7 +545,7 @@ int main() { return 0; }
 
 ---
 
-## 11. .gitignore 정책 — 변경사항 C11
+## 12. .gitignore 정책 — 변경사항 C11
 
 **자동 등록 대상:**
 - `.annotation/` → .gitignore에 자동 추가
@@ -509,7 +555,7 @@ int main() { return 0; }
 
 ---
 
-## 12. 죽은 코드 정리 대상
+## 13. 죽은 코드 정리 대상
 
 | 항목 | 위치 | 조치 |
 |------|------|------|
@@ -524,7 +570,7 @@ int main() { return 0; }
 
 ---
 
-## 13. 보안 수정 대상
+## 14. 보안 수정 대상
 
 | 위치 | 현재 | 수정 |
 |------|------|------|
@@ -536,7 +582,7 @@ int main() { return 0; }
 
 ---
 
-## 14. 이번 기획에서 변경되는 항목 요약
+## 15. 이번 기획에서 변경되는 항목 요약
 
 | # | 변경 | 영향 파일 | 상세 |
 |---|------|----------|------|
@@ -556,7 +602,7 @@ int main() { return 0; }
 
 ---
 
-## 15. 하네스 검증 체크리스트 (기획 승인 후 적용)
+## 16. 하네스 검증 체크리스트 (기획 승인 후 적용)
 
 1. **컴파일 검증** — `npm run compile` 에러 0건
 2. **git filter 실제 테스트** — 10종 태그 패턴 입력 → 필터 실행 → 태그 0건 + 코드 보존 확인

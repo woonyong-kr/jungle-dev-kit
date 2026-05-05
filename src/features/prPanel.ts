@@ -7,6 +7,7 @@ import { GitUtils } from '../utils/gitUtils';
 import { APIKeyManager } from '../utils/apiKeyManager';
 import { ConfigManager, PR_DIFF_TRUNCATE_LIMIT } from '../utils/configManager';
 import { TagSystem } from './tagSystem';
+import { GoalTracker } from './goalTracker';
 
 const execAsync = promisify (exec);
 const execFileAsync = promisify (execFile);
@@ -35,14 +36,16 @@ export class PRPanel {
 	private apiKeys: APIKeyManager;
 	private config: ConfigManager;
 	private tagSystem: TagSystem;
+	private goalTracker: GoalTracker | null;
 	private _isCreatingPR = false;
 	private _panel: vscode.WebviewPanel | null = null;
 
-	constructor (git: GitUtils, apiKeys: APIKeyManager, config: ConfigManager, tagSystem: TagSystem) {
+	constructor (git: GitUtils, apiKeys: APIKeyManager, config: ConfigManager, tagSystem: TagSystem, goalTracker?: GoalTracker) {
 		this.git = git;
 		this.apiKeys = apiKeys;
 		this.config = config;
 		this.tagSystem = tagSystem;
+		this.goalTracker = goalTracker || null;
 	}
 
 	async openPanel (): Promise<void> {
@@ -251,6 +254,23 @@ export class PRPanel {
 			const reviewSummary = reviewTags.length > 0
 				? reviewTags.map ((t) => `  ${t.file}:${t.line + 1} — ${t.content}`).join ('\n')
 				: '  없음';
+			const goalContext = this.goalTracker?.getGoalPromptContext ();
+			const promptSections = [
+				goalContext,
+				`브랜치: ${branch}`,
+				'',
+				'=== 변경 파일 ===',
+				filesSummary,
+				'',
+				'=== 커밋 로그 ===',
+				commitsSummary,
+				'',
+				'=== @review 포인트 ===',
+				reviewSummary,
+				'',
+				'=== Diff ===',
+				this.truncateDiffSmart (diff || '', PR_DIFF_TRUNCATE_LIMIT),
+			].filter ((section) => section && section.trim ().length > 0);
 
 			panel.webview.postMessage ({ command: 'status', text: 'AI로 PR 내용 생성 중...' });
 			const response = await client.chat.completions.create ({
@@ -264,19 +284,7 @@ export class PRPanel {
 					},
 					{
 						role: 'user',
-						content: `브랜치: ${branch}
-
-=== 변경 파일 ===
-${filesSummary}
-
-=== 커밋 로그 ===
-${commitsSummary}
-
-=== @review 포인트 ===
-${reviewSummary}
-
-=== Diff ===
-${this.truncateDiffSmart (diff || '', PR_DIFF_TRUNCATE_LIMIT)}`,
+						content: promptSections.join ('\n'),
 					},
 				],
 			});
@@ -406,12 +414,16 @@ ${this.truncateDiffSmart (diff || '', PR_DIFF_TRUNCATE_LIMIT)}`,
 			return;
 		}
 
-		try {
-			const safeBranch = branch.replace (/[^a-zA-Z0-9_\-\/.]/g, '');
-			// gh가 설치되어 있으면 credential helper로 등록 (HTTPS 인증 자동 처리)
-			try { await execAsync ('gh auth setup-git', { cwd: root, timeout: 10000 }); } catch { /* 무시 */ }
-			await execAsync (`git push -u origin ${safeBranch}`, { cwd: root, timeout: 30000 });
-		} catch (pushErr: any) {
+			try {
+				const safeBranch = branch.replace (/[^a-zA-Z0-9_./-]/g, '');
+				// gh가 설치되어 있으면 credential helper로 등록 (HTTPS 인증 자동 처리)
+				try {
+					await execAsync ('gh auth setup-git', { cwd: root, timeout: 10000 });
+				} catch {
+					void 0;
+				}
+				await execAsync (`git push -u origin ${safeBranch}`, { cwd: root, timeout: 30000 });
+			} catch (pushErr: any) {
 			const msg = pushErr.stderr || pushErr.message || '';
 			// "Everything up-to-date" 는 정상 — 이미 푸시된 상태
 			if (!msg.includes ('up-to-date') && !msg.includes ('up to date')) {
@@ -438,7 +450,7 @@ ${this.truncateDiffSmart (diff || '', PR_DIFF_TRUNCATE_LIMIT)}`,
 
 			// execFile 인자 배열 방식으로 shell injection 완전 차단
 			const title = fs.readFileSync (titleFile, 'utf-8').trim ();
-			const safeBase = data.base.replace (/[^a-zA-Z0-9_\-\/\.]/g, '');
+				const safeBase = data.base.replace (/[^a-zA-Z0-9_./-]/g, '');
 
 			const args = ['pr', 'create', '--title', title, '--body-file', bodyFile, '--base', safeBase];
 			if (data.reviewers.trim ()) {
@@ -475,7 +487,9 @@ ${this.truncateDiffSmart (diff || '', PR_DIFF_TRUNCATE_LIMIT)}`,
 						});
 						return;
 					}
-				} catch { /* 조회 실패 시 기본 메시지 */ }
+					} catch {
+						void 0;
+					}
 				userMsg = '이 브랜치에 이미 열린 PR이 있습니다. 새 커밋을 push하면 자동 반영됩니다.';
 			} else if (stderr.includes ('not a git repository')) {
 				userMsg = '현재 디렉토리가 git 저장소가 아닙니다.';
@@ -490,9 +504,13 @@ ${this.truncateDiffSmart (diff || '', PR_DIFF_TRUNCATE_LIMIT)}`,
 			});
 		} finally {
 			// Cleanup temp files (성공·실패 모두)
-			try {fs.unlinkSync (titleFile);} catch {}
-			try {fs.unlinkSync (bodyFile);} catch {}
-		}
+				if (fs.existsSync (titleFile)) {
+					fs.unlinkSync (titleFile);
+				}
+				if (fs.existsSync (bodyFile)) {
+					fs.unlinkSync (bodyFile);
+				}
+			}
 		} finally {
 			this._isCreatingPR = false;
 		}

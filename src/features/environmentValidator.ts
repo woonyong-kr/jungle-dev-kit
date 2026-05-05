@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { ConfigManager, EnvConfig } from '../utils/configManager';
+import { ConfigManager } from '../utils/configManager';
 
 const execAsync = promisify (exec);
 

@@ -110,7 +110,7 @@ export class StyleEnforcer {
 		// 기존 .jungle-kit/styles/ 에 있던 파일 → 루트로 마이그레이션
 		const legacyPath = path.join (root, '.jungle-kit', 'styles', '.clang-format');
 		if (fs.existsSync (legacyPath)) {
-			try { fs.unlinkSync (legacyPath); } catch {}
+			fs.rmSync (legacyPath, { force: true });
 			console.log ('[Annotation] 레거시 .jungle-kit/styles/.clang-format 제거');
 		}
 

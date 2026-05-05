@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **goalTracker**: Codex CLI의 `/goal`과 비슷한 장기 작업 목표 고정 기능 추가
+  - `Goal 설정`, `Goal 보기`, `Goal 완료 처리`, `Goal 삭제` 명령 제공
+  - `.annotation/goal.json`에 로컬 저장, 상태바에서 항상 확인 가능
+  - 활성 Goal을 AI 커밋 메시지, AI PR 생성, AI 리뷰 설명 프롬프트에 자동 포함
+- **tooling**: ESLint 설정과 smoke test 추가
+  - `npm run lint`가 실제로 동작하도록 `.eslintrc.cjs` 추가
+  - `npm test`가 compile + 명령/README/activation smoke 검증을 수행하도록 복구
+
+### Changed
+- **package.json**: `jungleKit.goal.showStatusBar`, `jungleKit.goal.includeInAI` 설정 추가
+- **README / FEATURE_SPEC**: Goal 기능 사용법 및 동작 기준 문서화
+- **package.json / README**: `.annotation` 기준의 활성화 조건, 설정 설명, 저장 경로로 정렬
+
+### Fixed
+- **repo hygiene**: 추적 중이던 레거시 `.jungle-kit` 로컬 산출물과 잘못된 `.gitattributes` 제거
+- **validation**: 깨져 있던 `npm test` 스크립트 복구 및 lint 실행 가능 상태로 정리
+
 ## [0.25.0] - 2026-05-05
 
 ### Added
