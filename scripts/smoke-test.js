@@ -29,6 +29,7 @@ function main() {
 	const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
 	const extensionSource = readText('src/extension.ts');
 	const readme = readText('README.md');
+	const vscodeIgnore = readText('.vscodeignore');
 
 	const contributedCommands = listCommandIdsFromPackage(pkg);
 	const registeredCommands = listRegisteredCommandIds(extensionSource);
@@ -59,6 +60,18 @@ function main() {
 	assert(
 		!readme.includes('`jungleKit.project`'),
 		'README에 제거된 jungleKit.project 설정이 남아 있습니다.'
+	);
+	assert(
+		fs.existsSync(path.join(process.cwd(), 'LICENSE')),
+		'LICENSE 파일이 없습니다.'
+	);
+	assert(
+		vscodeIgnore.includes('.annotation/**'),
+		'.vscodeignore에 .annotation/** 제외 규칙이 없습니다.'
+	);
+	assert(
+		vscodeIgnore.includes('scripts/**'),
+		'.vscodeignore에 scripts/** 제외 규칙이 없습니다.'
 	);
 
 	console.log('Smoke test passed.');

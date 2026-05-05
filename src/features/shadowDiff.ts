@@ -81,7 +81,16 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 		// Update decorations when switching files
 		context.subscriptions.push (
 			vscode.window.onDidChangeActiveTextEditor (async (editor) => {
-				if (editor) {await this.updateEditorDecorations (editor);}
+				if (editor && this.isSupportedEditor (editor)) {await this.updateEditorDecorations (editor);}
+			})
+		);
+		context.subscriptions.push (
+			vscode.window.onDidChangeVisibleTextEditors (async (editors) => {
+				for (const editor of editors) {
+					if (this.isSupportedEditor (editor)) {
+						await this.updateEditorDecorations (editor);
+					}
+				}
 			})
 		);
 	}
@@ -146,7 +155,7 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 			if (this._disposed) { return; }
 			await this.analyzeRemoteBranches ();
 			if (this._disposed) { return; }
-			this.updateAllDecorations ();
+			await this.updateAllDecorations ();
 			this._onDidChangeCodeLenses.fire ();
 		} catch (err) {
 			console.warn ('[Annotation] ShadowDiff fetch/analyze 실패:', err instanceof Error ? err.message : err);
@@ -168,47 +177,13 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 			(b) => b.startsWith ('origin/') && !b.includes ('HEAD') && b !== `origin/${currentBranch}`
 		);
 
-		const newChanges: BranchChange[] = [];
+		const branchResults = await Promise.allSettled (
+			remoteBranches.map ((remoteBranch) => this.analyzeRemoteBranch (root, currentBranch, remoteBranch))
+		);
 
-		for (const remoteBranch of remoteBranches) {
-			try {
-				// Get diff between current branch and remote branch (only C/H files)
-				const { stdout: diffOutput } = await execFileAsync (
-					'git', ['diff', `${sanitizeRef (currentBranch)}...${sanitizeRef (remoteBranch)}`, '--', '*.c', '*.h'],
-					{ cwd: root, maxBuffer: MAX_BUFFER }
-				);
-
-				if (!diffOutput.trim ()) {continue;}
-
-				// Get author of the branch
-				const { stdout: authorOutput } = await execFileAsync (
-					'git', ['log', sanitizeRef (remoteBranch), '-1', '--format=%an'],
-					{ cwd: root }
-				);
-				const author = authorOutput.trim ();
-
-				// Get last commit date
-				const { stdout: dateOutput } = await execFileAsync (
-					'git', ['log', sanitizeRef (remoteBranch), '-1', '--format=%ar'],
-					{ cwd: root }
-				);
-
-				// Parse hunks per file
-				const fileChanges = this.parseDiffToHunks (diffOutput);
-
-				for (const [file, hunks] of fileChanges.entries ()) {
-					newChanges.push ({
-						branch: remoteBranch.replace ('origin/', ''),
-						author,
-						file,
-						hunks,
-						lastCommitDate: dateOutput.trim (),
-					});
-				}
-			} catch {
-				// Skip branches that fail
-			}
-		}
+		const newChanges: BranchChange[] = branchResults.flatMap ((result) =>
+			result.status === 'fulfilled' ? result.value : []
+		);
 
 		// 원자적 교체 — 분석 도중 읽기 측에서 부분 데이터 참조 방지
 		this.branchChanges = newChanges;
@@ -268,8 +243,44 @@ export class ShadowDiff implements vscode.CodeLensProvider {
 	}
 
 	private async updateAllDecorations (): Promise<void> {
-		if (vscode.window.activeTextEditor) {
-			await this.updateEditorDecorations (vscode.window.activeTextEditor);
+		for (const editor of vscode.window.visibleTextEditors) {
+			if (this.isSupportedEditor (editor)) {
+				await this.updateEditorDecorations (editor);
+			}
+		}
+	}
+
+	private isSupportedEditor (editor: vscode.TextEditor): boolean {
+		return editor.document.languageId === 'c' || editor.document.languageId === 'cpp';
+	}
+
+	private async analyzeRemoteBranch (root: string, currentBranch: string, remoteBranch: string): Promise<BranchChange[]> {
+		try {
+			const { stdout: diffOutput } = await execFileAsync (
+				'git', ['diff', `${sanitizeRef (currentBranch)}...${sanitizeRef (remoteBranch)}`, '--', '*.c', '*.h'],
+				{ cwd: root, maxBuffer: MAX_BUFFER }
+			);
+
+			if (!diffOutput.trim ()) { return []; }
+
+			const [{ stdout: authorOutput }, { stdout: dateOutput }] = await Promise.all ([
+				execFileAsync ('git', ['log', sanitizeRef (remoteBranch), '-1', '--format=%an'], { cwd: root }),
+				execFileAsync ('git', ['log', sanitizeRef (remoteBranch), '-1', '--format=%ar'], { cwd: root }),
+			]);
+
+			const fileChanges = this.parseDiffToHunks (diffOutput);
+			const author = authorOutput.trim ();
+			const lastCommitDate = dateOutput.trim ();
+
+			return Array.from (fileChanges.entries ()).map (([file, hunks]) => ({
+				branch: remoteBranch.replace ('origin/', ''),
+				author,
+				file,
+				hunks,
+				lastCommitDate,
+			}));
+		} catch {
+			return [];
 		}
 	}
 

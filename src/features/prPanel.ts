@@ -1,21 +1,14 @@
 import * as vscode from 'vscode';
-import * as https from 'https';
-import { exec, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { GitUtils } from '../utils/gitUtils';
+import { DiffFile, GitUtils } from '../utils/gitUtils';
 import { APIKeyManager } from '../utils/apiKeyManager';
 import { ConfigManager, PR_DIFF_TRUNCATE_LIMIT } from '../utils/configManager';
+import { GitHubPrClient } from '../utils/githubPrClient';
 import { TagSystem } from './tagSystem';
 import { GoalTracker } from './goalTracker';
 
-const execAsync = promisify (exec);
 const execFileAsync = promisify (execFile);
-
-interface GitHubRemoteInfo {
-	owner: string;
-	repo: string;
-	token: string | null;
-}
 
 function escapeHtml (str: string): string {
 	return str
@@ -34,7 +27,7 @@ function escapeHtml (str: string): string {
  * - AI-generated PR title and body from staged diff
  * - Collects @review tags from tags.json
  * - Reviewer selection from .annotation/team.json
- * - One-click PR creation via `gh` CLI
+ * - One-click PR creation via GitHub API
  */
 export class PRPanel {
 	private git: GitUtils;
@@ -44,6 +37,7 @@ export class PRPanel {
 	private goalTracker: GoalTracker | null;
 	private _isCreatingPR = false;
 	private _panel: vscode.WebviewPanel | null = null;
+	private _panelState: { diff?: string; changedFiles: DiffFile[] } = { changedFiles: [] };
 
 	constructor (git: GitUtils, apiKeys: APIKeyManager, config: ConfigManager, tagSystem: TagSystem, goalTracker?: GoalTracker) {
 		this.git = git;
@@ -143,9 +137,7 @@ export class PRPanel {
 					command: 'updateFiles',
 					files: newChangedFiles,
 				});
-				// 내부 diff도 갱신 (AI 생성 시 사용)
-				this._currentDiff = newDiff;
-				this._currentChangedFiles = newChangedFiles;
+				this.setPanelState (newDiff, newChangedFiles);
 				break;
 			}
 			}
@@ -160,9 +152,7 @@ export class PRPanel {
 			}
 		});
 
-		// 내부 상태로 현재 diff/files 보관 (base 변경 시 갱신)
-		this._currentDiff = diff;
-		this._currentChangedFiles = changedFiles;
+		this.setPanelState (diff, changedFiles);
 
 		// 기존 PR 자동 감지 — 패널 열자마자 이미 PR이 있으면 알림
 		this.checkExistingPR (panel);
@@ -178,11 +168,11 @@ export class PRPanel {
 		const root = this.config.getWorkspaceRoot ();
 		if (!root) { return; }
 		try {
-			panel.webview.postMessage ({ command: 'status', text: '기존 PR 확인 중...' });
-			const remoteInfo = await this.resolveGitHubRemote (root);
+			const client = await GitHubPrClient.resolve (root);
 			const branch = await this.git.getCurrentBranch ();
-			if (!remoteInfo || !branch) { return; }
-			const existingPr = await this.findExistingPullRequest (remoteInfo, branch);
+			if (!client || !client.hasToken || !branch) { return; }
+			panel.webview.postMessage ({ command: 'status', text: '기존 PR 확인 중...' });
+			const existingPr = await client.findExistingPullRequest (branch);
 			if (!this._panel || !existingPr) { return; }
 			if (existingPr.state === 'open' && existingPr.html_url) {
 				panel.webview.postMessage ({
@@ -196,8 +186,9 @@ export class PRPanel {
 		}
 	}
 
-	private _currentDiff: string | undefined;
-	private _currentChangedFiles: Array<{ path: string; additions: number; deletions: number }> = [];
+	private setPanelState (diff: string | undefined, changedFiles: DiffFile[]): void {
+		this._panelState = { diff, changedFiles };
+	}
 
 	/** 공통 base 브랜치 후보를 우선순위에 따라 추정 */
 	private guessDefaultBase (branches: string[]): string {
@@ -213,13 +204,12 @@ export class PRPanel {
 		panel: vscode.WebviewPanel,
 		_diff: string,
 		branch: string,
-		_changedFiles: Array<{ path: string; additions: number; deletions: number }>,
+		_changedFiles: DiffFile[],
 		commits: Array<{ hash: string; message: string; author: string }>,
 		reviewTags: Array<{ file: string; line: number; content: string }>
 	): Promise<void> {
-		// base 변경 시 갱신된 값 사용
-		const diff = this._currentDiff ?? _diff;
-		const changedFiles = this._currentChangedFiles.length > 0 ? this._currentChangedFiles : _changedFiles;
+		const diff = this._panelState.diff ?? _diff;
+		const changedFiles = this._panelState.changedFiles.length > 0 ? this._panelState.changedFiles : _changedFiles;
 		const apiKey = await this.apiKeys.getKey ();
 		if (!apiKey) {
 			panel.webview.postMessage ({ command: 'error', text: 'API 키를 먼저 등록하세요.' });
@@ -356,12 +346,18 @@ export class PRPanel {
 			return;
 		}
 
-		// Check remote exists
-		const remoteInfo = await this.resolveGitHubRemote (root);
-		if (!remoteInfo) {
+		const client = await GitHubPrClient.resolve (root);
+		if (!client) {
 			panel.webview.postMessage ({
 				command: 'error',
-				text: 'GitHub origin remote를 해석할 수 없습니다. HTTPS origin 또는 GH_TOKEN/GITHUB_TOKEN을 확인하세요.',
+				text: 'GitHub origin remote를 해석할 수 없습니다. GitHub remote 또는 인증 토큰을 확인하세요.',
+			});
+			return;
+		}
+		if (!client.hasToken) {
+			panel.webview.postMessage ({
+				command: 'error',
+				text: 'GitHub API 토큰을 찾을 수 없습니다. HTTPS remote, GH_TOKEN/GITHUB_TOKEN, 또는 git credential helper를 확인하세요.',
 			});
 			return;
 		}
@@ -403,7 +399,7 @@ export class PRPanel {
 				.map ((reviewer) => reviewer.trim ())
 				.filter ((reviewer) => /^[a-zA-Z0-9_-]+$/.test (reviewer));
 
-			const existingPr = await this.findExistingPullRequest (remoteInfo, branch);
+			const existingPr = await client.findExistingPullRequest (branch);
 			if (existingPr?.html_url) {
 				panel.webview.postMessage ({
 					command: 'success',
@@ -413,7 +409,7 @@ export class PRPanel {
 				return;
 			}
 
-			const createdPr = await this.createPullRequest (remoteInfo, {
+			const createdPr = await client.createPullRequest ({
 				title,
 				body,
 				head: branch,
@@ -421,7 +417,7 @@ export class PRPanel {
 			});
 
 			if (reviewers.length > 0) {
-				await this.requestPullRequestReviewers (remoteInfo, createdPr.number, reviewers);
+				await client.requestPullRequestReviewers (createdPr.number, reviewers);
 			}
 
 			const prUrl = createdPr.html_url;
@@ -453,174 +449,6 @@ export class PRPanel {
 		} finally {
 			this._isCreatingPR = false;
 		}
-	}
-
-	private async resolveGitHubRemote (root: string): Promise<GitHubRemoteInfo | null> {
-		let remoteUrl = '';
-		try {
-			const { stdout } = await execAsync ('git remote get-url origin', { cwd: root, timeout: 10000 });
-			remoteUrl = stdout.trim ();
-		} catch {
-			return null;
-		}
-
-		const remoteInfo = this.parseGitHubRemote (remoteUrl);
-		if (!remoteInfo) { return null; }
-		if (remoteInfo.token) { return remoteInfo; }
-
-		const credentialToken = await this.getGitCredentialToken (root);
-		return {
-			...remoteInfo,
-			token: credentialToken,
-		};
-	}
-
-	private parseGitHubRemote (remoteUrl: string): GitHubRemoteInfo | null {
-		const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || null;
-
-		try {
-			if (remoteUrl.startsWith ('http://') || remoteUrl.startsWith ('https://')) {
-				const parsed = new URL (remoteUrl);
-				if (parsed.hostname !== 'github.com') { return null; }
-				const pathParts = parsed.pathname.replace (/^\//, '').replace (/\.git$/, '').split ('/');
-				if (pathParts.length < 2) { return null; }
-
-				const username = decodeURIComponent (parsed.username || '');
-				const password = decodeURIComponent (parsed.password || '');
-				const remoteToken = password || username || null;
-
-				return {
-					owner: pathParts[0],
-					repo: pathParts[1],
-					token: envToken || remoteToken,
-				};
-			}
-
-			const sshMatch = remoteUrl.match (/^(?:git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+)\/(.+?)(?:\.git)?$/);
-			if (!sshMatch) { return null; }
-
-			return {
-				owner: sshMatch[1],
-				repo: sshMatch[2],
-				token: envToken,
-			};
-		} catch {
-			return null;
-		}
-	}
-
-	private async getGitCredentialToken (root: string): Promise<string | null> {
-		try {
-			const { stdout } = await execAsync (
-				"printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill",
-				{ cwd: root, timeout: 10000 }
-			);
-
-			const passwordLine = stdout
-				.split ('\n')
-				.find ((line) => line.startsWith ('password='));
-
-			if (!passwordLine) { return null; }
-			const token = passwordLine.slice ('password='.length).trim ();
-			return token || null;
-		} catch {
-			return null;
-		}
-	}
-
-	private async findExistingPullRequest (
-		remoteInfo: GitHubRemoteInfo,
-		headBranch: string
-	): Promise<{ html_url: string; title: string; state: string } | null> {
-		const response = await this.githubRequest (
-			remoteInfo,
-			'GET',
-			`/repos/${remoteInfo.owner}/${remoteInfo.repo}/pulls?head=${encodeURIComponent (`${remoteInfo.owner}:${headBranch}`)}&state=open`
-		);
-
-		const pullRequests = JSON.parse (response) as Array<{ html_url: string; title: string; state: string }>;
-		return pullRequests[0] || null;
-	}
-
-	private async createPullRequest (
-		remoteInfo: GitHubRemoteInfo,
-		input: { title: string; body: string; head: string; base: string }
-	): Promise<{ html_url: string; number: number }> {
-		const response = await this.githubRequest (
-			remoteInfo,
-			'POST',
-			`/repos/${remoteInfo.owner}/${remoteInfo.repo}/pulls`,
-			{
-				title: input.title,
-				body: input.body,
-				head: input.head,
-				base: input.base,
-			}
-		);
-
-		return JSON.parse (response) as { html_url: string; number: number };
-	}
-
-	private async requestPullRequestReviewers (
-		remoteInfo: GitHubRemoteInfo,
-		prNumber: number,
-		reviewers: string[]
-	): Promise<void> {
-		if (reviewers.length === 0) { return; }
-		await this.githubRequest (
-			remoteInfo,
-			'POST',
-			`/repos/${remoteInfo.owner}/${remoteInfo.repo}/pulls/${prNumber}/requested_reviewers`,
-			{ reviewers }
-		);
-	}
-
-	private async githubRequest (
-		remoteInfo: GitHubRemoteInfo,
-		method: 'GET' | 'POST',
-		apiPath: string,
-		body?: unknown
-	): Promise<string> {
-		if (!remoteInfo.token) {
-			throw new Error ('Authentication token not available');
-		}
-
-		const payload = body ? JSON.stringify (body) : undefined;
-
-		return new Promise<string> ((resolve, reject) => {
-			const request = https.request (
-				{
-					hostname: 'api.github.com',
-					path: apiPath,
-					method,
-					headers: {
-						'Accept': 'application/vnd.github+json',
-						'Authorization': `Bearer ${remoteInfo.token}`,
-						'User-Agent': 'jungle-dev-kit',
-						'X-GitHub-Api-Version': '2022-11-28',
-						...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength (payload) } : {}),
-					},
-				},
-				(response) => {
-					const chunks: Buffer[] = [];
-					response.on ('data', (chunk) => chunks.push (Buffer.isBuffer (chunk) ? chunk : Buffer.from (chunk)));
-					response.on ('end', () => {
-						const responseBody = Buffer.concat (chunks).toString ('utf8');
-						if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-							reject (new Error (responseBody || `GitHub API request failed with status ${response.statusCode}`));
-							return;
-						}
-						resolve (responseBody);
-					});
-				}
-			);
-
-			request.on ('error', reject);
-			if (payload) {
-				request.write (payload);
-			}
-			request.end ();
-		});
 	}
 
 	private getWebviewContent (
