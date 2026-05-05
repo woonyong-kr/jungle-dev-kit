@@ -1,6 +1,12 @@
 # Changelog
 
-## [0.24.4] - 2026-05-05
+## [0.25.0] - 2026-05-05
+
+### Added
+- **gdbWarnTracker**: GDB 디버그 콘솔 자동 감시 — breakpoint hit, signal, PANIC, ASSERT FAILED 감지 시 해당 위치에 `@warn` 어노테이션 자동 삽입
+  - 지원 패턴: `Breakpoint N, func() at file:line`, `Program received signal SIGSEGV`, `Kernel PANIC at file:line`, `ASSERT FAILED at file:line`
+  - 중복 삽입 방지 (동일 세션 내 같은 위치 1회만)
+  - 상대 경로(../../) 자동 해석 via workspace glob 검색
 
 ### Fixed
 - **prPanel**: AI PR 생성 시 diff 절삭 한도를 6KB → 80KB로 증가하여 대규모 변경도 정확히 분석

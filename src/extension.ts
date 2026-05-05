@@ -7,6 +7,7 @@ import { TagSystem } from './features/tagSystem';
 import { ShadowDiff } from './features/shadowDiff';
 
 import { PRPanel } from './features/prPanel';
+import { GdbWarnTracker } from './features/gdbWarnTracker';
 import { APIKeyManager } from './utils/apiKeyManager';
 import { ConfigManager } from './utils/configManager';
 import { GitUtils } from './utils/gitUtils';
@@ -30,6 +31,7 @@ export async function activate (context: vscode.ExtensionContext) {
 	const shadowDiff = new ShadowDiff (config, git);
 	const smartCommit = new SmartCommit (config, apiKeys, git);
 	const prPanel = new PRPanel (git, apiKeys, config, tagSystem);
+	const gdbTracker = new GdbWarnTracker ();
 
 	// --- Register tree views ---
 	const treeView = vscode.window.createTreeView ('jungleKit.tags', {
@@ -122,11 +124,12 @@ export async function activate (context: vscode.ExtensionContext) {
 	}
 
 	// --- Auto-activate features ---
-	const activations: [string, () => Promise<void>][] = [
+	const activations: [string, () => Promise<void> | void][] = [
 		['StyleEnforcer', () => style.activate (context)],
 		['EnvironmentValidator', () => envValidator.validateOnStartup ()],
 		['TagSystem', () => tagSystem.activate (context)],
 		['ShadowDiff', () => shadowDiff.activate (context)],
+		['GdbWarnTracker', () => gdbTracker.activate (context)],
 	];
 
 	for (const [name, fn] of activations) {
