@@ -41,7 +41,7 @@ export class SmartCommit {
 					await this.showSuggestions (suggestions);
 				} catch (error: any) {
 					vscode.window.showErrorMessage (
-						`[Annotation] 커밋 메시지 생성 실패: ${error.message || error}`
+						`[Annotation] 커밋 메시지 생성 실패: ${error instanceof Error ? error.message : String (error)}`
 					);
 				}
 			}
@@ -53,9 +53,12 @@ export class SmartCommit {
 			.getConfiguration ('jungleKit')
 			.get<string> ('ai.model', 'gpt-4o-mini');
 
-		const trimmedDiff = diff.length > AI_DIFF_TRUNCATE_LIMIT
-			? diff.substring (0, AI_DIFF_TRUNCATE_LIMIT) + '\n... (truncated)'
-			: diff;
+		let trimmedDiff = diff;
+		if (diff.length > AI_DIFF_TRUNCATE_LIMIT) {
+			// 줄 경계에서 자르기 — UTF-8 다중 바이트 문자 손상 방지
+			const cutPoint = diff.lastIndexOf ('\n', AI_DIFF_TRUNCATE_LIMIT);
+			trimmedDiff = diff.substring (0, cutPoint > 0 ? cutPoint : AI_DIFF_TRUNCATE_LIMIT) + '\n... (truncated)';
+		}
 		const goalContext = this.goalTracker?.getGoalPromptContext ();
 		const userPrompt = goalContext
 			? `${goalContext}\n\n=== Staged Diff ===\n${trimmedDiff}`
@@ -114,7 +117,12 @@ export class SmartCommit {
 			await vscode.env.clipboard.writeText (suggestions);
 			return;
 		}
-		gitApi.repositories[0].inputBox.value = suggestions;
+		// 현재 워크스페이스에 맞는 리포지토리 찾기 (멀티루트 대응)
+		const root = this.config.getWorkspaceRoot ();
+		const repo = gitApi.repositories.find (
+			(r: any) => root && r.rootUri?.fsPath === root
+		) || gitApi.repositories[0];
+		repo.inputBox.value = suggestions;
 		vscode.window.showInformationMessage (
 			`[Annotation] 커밋 메시지가 설정되었습니다.`
 		);

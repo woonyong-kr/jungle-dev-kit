@@ -82,9 +82,10 @@ export class GitUtils {
 	): Promise<
 		{ hash: string; author: string; message: string; date: string }[]
 	> {
-		const SEP = '__|__';
+		const SEP = '\x1f'; // ASCII Unit Separator — 커밋 메시지에 포함 불가
+		const safeCount = Number.isFinite (count) ? Math.max (1, Math.min (count, 100)) : 5;
 		const output = await this.run (
-			`git log ${sanitizeRef (branch)} -${Math.max (1, Math.min (count, 100))} --format="%H${SEP}%an${SEP}%s${SEP}%ar"`
+			`git log ${sanitizeRef (branch)} -${safeCount} --format="%H${SEP}%an${SEP}%s${SEP}%ar"`
 		);
 		return output
 			.split ('\n')
@@ -94,8 +95,8 @@ export class GitUtils {
 				return {
 					hash: parts[0] || '',
 					author: parts[1] || '',
-					message: parts[2] || '',
-					date: parts[3] || '',
+					message: parts.slice (2, -1).join (SEP) || '',
+					date: parts[parts.length - 1] || '',
 				};
 			});
 	}

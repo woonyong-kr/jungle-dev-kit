@@ -378,10 +378,9 @@ export class GoalTracker {
 	}
 
 	private formatDate (isoDate: string): string {
-		try {
-			return new Date (isoDate).toLocaleString ();
-		} catch {
-			return isoDate;
-		}
+		if (!isoDate) { return ''; }
+		const date = new Date (isoDate);
+		if (isNaN (date.getTime ())) { return isoDate; }
+		return date.toLocaleString ();
 	}
 }

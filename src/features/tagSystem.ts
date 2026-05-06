@@ -412,7 +412,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				const ordArr = orderMapByContent.get (contentKey)!;
 				if (ordArr.length > 0) { ann.sortOrder = ordArr.shift ()!; }
 			}
-			const guardKey = `${ann.file}:${ann.type}:${ann.content}`;
+			const guardKey = `${ann.file}:${ann.type}:${ann.line}:${ann.content}`;
 			if (!this._deletionGuard.has (guardKey)) {
 				this.annotations.push (ann);
 			}
@@ -457,6 +457,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 			// /* @tag ...  (여러 줄 블록 — 첫 줄에 내용 있어도 매치)
 			let blockEndLine = i;
+			let blockClosed = false;
 			if (!type) {
 				const blockStartMatch = lineText.match (BLOCK_START_RE);
 				if (blockStartMatch) {
@@ -467,24 +468,34 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					if (firstLineContent) {
 						contentLines.push (firstLineContent.replace (/,\s*$/, ','));
 					}
-					// 다음 줄들에서 내용 수집 (*/을 만날 때까지, 최대 30줄)
-					const maxBlockEnd = Math.min (i + MAX_BLOCK_COMMENT_LINES, doc.lineCount);
-					for (let j = i + 1; j < maxBlockEnd; j++) {
-						const nextLine = doc.lineAt (j).text.trim ();
-						if (nextLine.endsWith ('*/')) {
-							const last = nextLine.replace (/^\*\s?/, '').replace (/\s*\*\/$/, '').trim ();
-							if (last) { contentLines.push (last); }
-							blockEndLine = j;
-							break;
+					// 첫 줄 자체가 닫히는 경우 (/* @tag content */)
+					if (lineText.trimEnd ().endsWith ('*/')) {
+						blockClosed = true;
+					} else {
+						// 다음 줄들에서 내용 수집 (*/을 만날 때까지, 최대 30줄)
+						const maxBlockEnd = Math.min (i + MAX_BLOCK_COMMENT_LINES, doc.lineCount);
+						for (let j = i + 1; j < maxBlockEnd; j++) {
+							const nextLine = doc.lineAt (j).text.trim ();
+							if (nextLine.endsWith ('*/')) {
+								const last = nextLine.replace (/^\*\s?/, '').replace (/\s*\*\/$/, '').trim ();
+								if (last) { contentLines.push (last); }
+								blockEndLine = j;
+								blockClosed = true;
+								break;
+							}
+							// * 접두사 제거 (있으면), 없어도 수집 계속
+							const stripped = nextLine.startsWith ('*')
+								? nextLine.replace (/^\*\s?/, '').trim ()
+								: nextLine;
+							if (stripped) { contentLines.push (stripped); }
 						}
-						// * 접두사 제거 (있으면), 없어도 수집 계속
-						const stripped = nextLine.startsWith ('*')
-							? nextLine.replace (/^\*\s?/, '').trim ()
-							: nextLine;
-						if (stripped) { contentLines.push (stripped); }
-						blockEndLine = j;
 					}
-					content = contentLines.join (' ').trim () || type;
+					// 미종료 블록은 무시 — type을 null로 리셋하여 i 전진 방지
+					if (!blockClosed) {
+						type = null;
+					} else {
+						content = contentLines.join (' ').trim () || type;
+					}
 				}
 			}
 
@@ -656,7 +667,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		// 파일에 실제 주석 삽입
 		const indent = editor.document.lineAt (line).text.match (/^(\s*)/)?.[1] || '';
 		// 주석 내부에 */ 가 포함되면 주석이 조기 종료되므로 이스케이프
-		const safeContent = content ? content.replace (/\*\//g, '* /') : '';
+		const safeContent = content ? content.replace (/\n/g, ' ').replace (/\*\//g, '* /') : '';
 		const commentText = safeContent
 			? `${indent}/* @${type} ${safeContent} */\n`
 			: `${indent}/* @${type} */\n`;
@@ -737,11 +748,20 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 						const edit = new vscode.WorkspaceEdit ();
 						const endLine = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount);
 						const deletedLines = endLine - ann.line;
-						// EOF일 때 Range가 문서 끝을 초과하지 않도록 클램핑
-						const rangeEnd = endLine < doc.lineCount
-							? new vscode.Position (endLine, 0)
-							: doc.lineAt (doc.lineCount - 1).range.end;
-						edit.delete (uri, new vscode.Range (ann.line, 0, rangeEnd.line, rangeEnd.character));
+						// EOF일 때 이전 줄의 개행까지 포함하여 빈 줄 남지 않도록 처리
+						let rangeStart = new vscode.Position (ann.line, 0);
+						let rangeEnd: vscode.Position;
+						if (endLine < doc.lineCount) {
+							rangeEnd = new vscode.Position (endLine, 0);
+						} else if (ann.line > 0) {
+							// 마지막 줄 삭제 — 이전 줄의 끝부터 문서 끝까지
+							rangeStart = doc.lineAt (ann.line - 1).range.end;
+							rangeEnd = doc.lineAt (doc.lineCount - 1).range.end;
+						} else {
+							// 문서 전체가 annotation인 경우
+							rangeEnd = doc.lineAt (doc.lineCount - 1).range.end;
+						}
+						edit.delete (uri, new vscode.Range (rangeStart, rangeEnd));
 						await vscode.workspace.applyEdit (edit);
 
 						// applyEdit이 onDidChangeTextDocument를 트리거 → 새 스캔 타이머 예약됨
@@ -766,8 +786,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			} catch { /* ignore */ }
 		}
 
-		// 삭제 직후 재스캔에 의한 재추가 방지 가드
-		const guardKey = `${ann.file}:${ann.type}:${ann.content}`;
+		// 삭제 직후 재스캔에 의한 재추가 방지 가드 (line 포함 — 동일 content 태그 충돌 방지)
+		const guardKey = `${ann.file}:${ann.type}:${ann.line}:${ann.content}`;
 		this._deletionGuard.add (guardKey);
 		setTimeout (() => this._deletionGuard.delete (guardKey), 2000);
 
@@ -822,6 +842,13 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		// 디바운스된 스캔 타이머 취소 — 삭제 직후 재스캔으로 복원되는 것 방지
 		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 
+		// 삭제 대상을 _deletionGuard에 등록 — 재스캔 시 재추가 방지
+		for (const t of targets) {
+			const gk = `${t.file}:${t.type}:${t.line}:${t.content}`;
+			this._deletionGuard.add (gk);
+			setTimeout (() => this._deletionGuard.delete (gk), 3000);
+		}
+
 		// 파일에서 주석 줄 삭제
 		await this.removeAnnotationLinesFromFiles (targets);
 
@@ -839,6 +866,14 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 
 		const fileAnns = this.annotations.filter ((a) => a.file === file);
+
+		// 삭제 대상을 _deletionGuard에 등록
+		for (const t of fileAnns) {
+			const gk = `${t.file}:${t.type}:${t.line}:${t.content}`;
+			this._deletionGuard.add (gk);
+			setTimeout (() => this._deletionGuard.delete (gk), 3000);
+		}
+
 		await this.removeAnnotationLinesFromFiles (fileAnns);
 
 		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
@@ -874,11 +909,24 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					const lineText = doc.lineAt (ann.line).text;
 					if (lineText.match (SINGLE_LINE_RE) || lineText.match (BLOCK_SINGLE_RE) || lineText.match (BLOCK_START_RE)) {
 						const endLine = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount);
-						// EOF 클램핑 — 파일 마지막 줄일 때 범위가 문서 끝을 초과하지 않도록
-						const rangeEnd = endLine < doc.lineCount
-							? new vscode.Position (endLine, 0)
-							: doc.lineAt (doc.lineCount - 1).range.end;
-						edit.delete (uri, new vscode.Range (ann.line, 0, rangeEnd.line, rangeEnd.character));
+						// 중복 범위 방지 — endLine 내 줄이 이미 삭제 예정인지 확인
+						let overlap = false;
+						for (let l = ann.line; l < endLine; l++) {
+							if (deleted.has (l) && l !== ann.line) { overlap = true; break; }
+						}
+						if (overlap) { continue; }
+						// EOF 처리 — 마지막 줄 삭제 시 이전 줄의 개행 포함
+						let rangeStart = new vscode.Position (ann.line, 0);
+						let rangeEnd: vscode.Position;
+						if (endLine < doc.lineCount) {
+							rangeEnd = new vscode.Position (endLine, 0);
+						} else if (ann.line > 0) {
+							rangeStart = doc.lineAt (ann.line - 1).range.end;
+							rangeEnd = doc.lineAt (doc.lineCount - 1).range.end;
+						} else {
+							rangeEnd = doc.lineAt (doc.lineCount - 1).range.end;
+						}
+						edit.delete (uri, new vscode.Range (rangeStart, rangeEnd));
 						for (let l = ann.line; l < endLine; l++) { deleted.add (l); }
 					}
 				}
@@ -926,6 +974,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			this.filterText = null;
 		}
 
+		this._navIndex = -1; // 필터 변경 시 탐색 인덱스 리셋
 		this._onDidChangeTreeData.fire (undefined);
 	}
 
@@ -1097,6 +1146,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	}
 
 	handleDrop (target: TagTreeItem | undefined, dataTransfer: vscode.DataTransfer): void {
+		// 드래그 중 scanDocument가 sortOrder를 덮어쓰지 않도록 타이머 취소
+		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 		const raw = dataTransfer.get ('application/vnd.code.tree.jungleKit.tags');
 		if (!raw) { return; }
 		const draggedIds: string[] = raw.value;
@@ -1617,11 +1668,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				if (!currentHead || currentHead === this._lastKnownHead) { return; }
 
 				const oldHead = this._lastKnownHead;
-				this._lastKnownHead = currentHead;
 
 				if (oldHead) {
 					await this.generateReviewsForDiff (oldHead, currentHead);
 				}
+				// diff 완료 후에 업데이트 — TOCTOU 방지 (처리 중 새 커밋 감지 누락 방지)
+				this._lastKnownHead = currentHead;
 			} finally {
 				reviewInProgress = false;
 			}
@@ -1847,7 +1899,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					vscode.window.showInformationMessage (msg);
 				} catch (err: any) {
 					// 최초 커밋인 경우 부모가 없으므로 --root 사용
-					if (err.message?.includes ('unknown revision')) {
+					if (err.code === 128 || err.message?.includes ('unknown revision') || err.message?.includes ('bad revision')) {
 						try {
 							const { stdout: rootDiff } = await execAsync (
 								`git show ${sanitizeRef (commitHash)} --unified=0 --diff-filter=AM -- ${DIFF_FILE_EXTENSIONS}`,
@@ -1916,7 +1968,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 
 			const hunkMatch = line.match (/^@@ .+ \+(\d+)/);
-			if (hunkMatch) {
+			if (hunkMatch && currentFile) {
 				const startLine = parseInt (hunkMatch[1], 10);
 				let addedLineNum = startLine;
 
@@ -1938,7 +1990,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					const funcMatch = code.match (
 						/^\s*((?:static\s+|inline\s+|extern\s+|const\s+)*\w[\w\s*]+)\s+(\w+)\s*\(([^)]*)\)\s*\{?\s*$/
 					);
-					if (funcMatch && !code.match (/^\s*(if|else|for|while|switch|return|struct|enum|typedef|#)/)) {
+					if (funcMatch && !code.match (/^\s*(if|else|for|while|switch|return|struct|enum|typedef|#)/) && !code.trimEnd ().endsWith (';')) {
 						results.push ({
 							file: currentFile,
 							line: addedLineNum - 1,
@@ -2112,7 +2164,8 @@ let buf = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', c => { buf += c; });
 process.stdin.on('end', () => {
-  const lines = buf.split('\\n');
+  const endsWithNewline = buf.endsWith('\\n') || buf.endsWith('\\r\\n');
+  const lines = buf.replace(/\\r\\n/g, '\\n').split('\\n');
   const out = [];
   let skip = false;
   for (const line of lines) {
@@ -2125,7 +2178,9 @@ process.stdin.on('end', () => {
     if (blockStartRe.test(line)) { skip = true; continue; }
     out.push(line);
   }
-  process.stdout.write(out.join('\\n'));
+  let result = out.join('\\n');
+  if (endsWithNewline && !result.endsWith('\\n')) { result += '\\n'; }
+  process.stdout.write(result);
 });
 `;
 			fs.writeFileSync (cleanScript, nodeScript, { mode: 0o755 });

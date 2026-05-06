@@ -63,7 +63,7 @@ export class GitHubPrClient {
 			`/repos/${this.remoteInfo.owner}/${this.remoteInfo.repo}/pulls?head=${encodeURIComponent (`${this.remoteInfo.owner}:${headBranch}`)}&state=open`
 		);
 
-		const pullRequests = JSON.parse (response) as ExistingPullRequest[];
+		const pullRequests = GitHubPrClient.safeJsonParse<ExistingPullRequest[]> (response);
 		return pullRequests[0] || null;
 	}
 
@@ -79,7 +79,7 @@ export class GitHubPrClient {
 			}
 		);
 
-		return JSON.parse (response) as CreatedPullRequest;
+		return GitHubPrClient.safeJsonParse<CreatedPullRequest> (response);
 	}
 
 	async requestPullRequestReviewers (prNumber: number, reviewers: string[]): Promise<void> {
@@ -126,6 +126,15 @@ export class GitHubPrClient {
 			};
 		} catch {
 			return null;
+		}
+	}
+
+	private static safeJsonParse<T> (text: string): T {
+		try {
+			return JSON.parse (text) as T;
+		} catch {
+			const preview = text.substring (0, 200);
+			throw new Error (`GitHub API가 잘못된 JSON을 반환했습니다: ${preview}`);
 		}
 	}
 
@@ -181,7 +190,18 @@ export class GitHubPrClient {
 				},
 				(response) => {
 					const chunks: Buffer[] = [];
-					response.on ('data', (chunk) => chunks.push (Buffer.isBuffer (chunk) ? chunk : Buffer.from (chunk)));
+					const MAX_RESPONSE_SIZE = 2 * 1024 * 1024; // 2MB
+					let totalSize = 0;
+					response.on ('data', (chunk) => {
+						const buf = Buffer.isBuffer (chunk) ? chunk : Buffer.from (chunk);
+						totalSize += buf.length;
+						if (totalSize > MAX_RESPONSE_SIZE) {
+							response.destroy ();
+							reject (new Error (`GitHub API 응답이 너무 큽니다 (>${MAX_RESPONSE_SIZE} bytes)`));
+							return;
+						}
+						chunks.push (buf);
+					});
 					response.on ('end', () => {
 						const responseBody = Buffer.concat (chunks).toString ('utf8');
 						if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {

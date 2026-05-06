@@ -129,7 +129,11 @@ export class GdbWarnTracker {
 
 			const edit = new vscode.WorkspaceEdit ();
 			edit.insert (uri, new vscode.Position (targetLine, 0), commentText);
-			await vscode.workspace.applyEdit (edit);
+			const ok = await vscode.workspace.applyEdit (edit);
+			if (!ok) {
+				console.warn (`[Annotation] GDB @warn 삽입 실패 (applyEdit returned false): ${rawFile}:${lineNum}`);
+				return;
+			}
 
 			console.log (`[Annotation] GDB @warn 자동 삽입: ${rawFile}:${lineNum} — ${content}`);
 		} catch (err) {

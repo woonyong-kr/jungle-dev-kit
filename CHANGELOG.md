@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.26.0] - 2026-05-06
+
+### Fixed
+- **tagSystem**: `_deletionGuard` 키에 line 번호 포함 — 동일 content 태그 충돌 방지
+- **tagSystem**: 미종료 블록 주석에서 `i`가 잘못 전진하는 버그 수정 (`blockClosed` 플래그 도입)
+- **tagSystem**: `clearAllAnnotations`/`clearFileAnnotations`에 `_deletionGuard` 적용 — 삭제 후 재추가 방지
+- **tagSystem**: EOF 줄 삭제 시 빈 줄 남는 버그 수정 — 이전 줄 개행 포함 삭제
+- **tagSystem**: `addTag` 입력에서 newline 제거 — 블록 주석 깨짐 방지
+- **tagSystem**: `handleDrop` 시 `_scanTimer` 취소 — sortOrder 덮어쓰기 방지
+- **tagSystem**: `_lastKnownHead` TOCTOU 수정 — diff 완료 후 업데이트
+- **tagSystem**: `parseDiffAdditions` — `currentFile` 빈 문자열 방어, 함수 프로토타입 제외
+- **tagSystem**: clean filter CRLF 지원 + trailing newline 보존
+- **tagSystem**: `removeAnnotationLinesFromFiles` 중복 범위 방지 + EOF 처리 개선
+- **tagSystem**: 초기 커밋 에러 감지 — exit code 128 + bad revision 추가
+- **tagSystem**: `_navIndex` 필터 변경 시 리셋
+- **prPanel**: branch name sanitization 시 변경 감지 및 에러 표시
+- **prPanel**: `truncateDiffSmart` perFile=0 방어 + limit 초과 방지
+- **prPanel**: AI 에러 메시지 타입 안전성 개선
+- **githubPrClient**: `JSON.parse` try/catch 래핑 — 비-JSON 응답 크래시 방지
+- **githubPrClient**: 응답 body 2MB 크기 제한 — 메모리 폭주 방지
+- **gitUtils**: 커밋 로그 구분자를 ASCII Unit Separator로 변경 — 커밋 메시지 내 구분자 충돌 방지
+- **gitUtils**: `NaN` count 방어
+- **smartCommit**: `repositories[0]` → 워크스페이스 루트 매칭 (멀티루트 대응)
+- **smartCommit**: diff 트런케이션을 줄 경계에서 자르기
+- **smartCommit**: 에러 메시지 타입 안전성 개선
+- **goalTracker**: `formatDate` Invalid Date 방어
+- **gdbWarnTracker**: `applyEdit` 결과 확인
+- **configManager**: `.gitignore` 항목 체크를 줄 단위 exact match로 변경
+
 ## [0.25.6] - 2026-05-06
 
 ### Fixed

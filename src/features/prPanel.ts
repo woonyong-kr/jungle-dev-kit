@@ -290,7 +290,7 @@ export class PRPanel {
 		} catch (err: any) {
 			panel.webview.postMessage ({
 				command: 'error',
-				text: `AI 생성 실패: ${err.message}`,
+				text: `AI 생성 실패: ${err instanceof Error ? err.message : String (err)}`,
 			});
 		}
 	}
@@ -305,21 +305,24 @@ export class PRPanel {
 
 		// 1차: 파일당 균등 할당량 계산
 		const perFile = Math.floor (limit / chunks.length);
+		if (perFile <= 0) { return diff.substring (0, limit); }
 		const result: string[] = [];
 		let used = 0;
 
 		for (const chunk of chunks) {
 			if (used >= limit) { break; }
-			if (chunk.length <= perFile) {
+			const remaining = limit - used;
+			if (chunk.length <= perFile && chunk.length <= remaining) {
 				// 할당량 내에 들어오면 전체 포함
 				result.push (chunk);
 				used += chunk.length;
 			} else {
 				// 초과 시 헤더 보존 + body 절삭
+				const budget = Math.min (perFile, remaining);
 				const lines = chunk.split ('\n');
 				const header = lines.slice (0, 5).join ('\n');
 				const body = lines.slice (5).join ('\n');
-				const allowed = Math.max (perFile - header.length - 20, 0);
+				const allowed = Math.max (budget - header.length - 20, 0);
 				const truncated = header + '\n' + body.substring (0, allowed) + '\n... (truncated)';
 				result.push (truncated);
 				used += truncated.length;
@@ -375,6 +378,13 @@ export class PRPanel {
 
 		try {
 			const safeBranch = branch.replace (/[^a-zA-Z0-9_./-]/g, '');
+			if (safeBranch !== branch) {
+				panel.webview.postMessage ({
+					command: 'error',
+					text: `브랜치 이름에 허용되지 않는 문자가 포함되어 있습니다: "${branch}"`,
+				});
+				return;
+			}
 			await execFileAsync ('git', ['push', '-u', 'origin', safeBranch], { cwd: root, timeout: 30000 });
 		} catch (pushErr: any) {
 			const msg = pushErr.stderr || pushErr.message || '';

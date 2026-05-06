@@ -178,7 +178,7 @@ export class ConfigManager {
 			const gitignorePath = path.join (root, '.gitignore');
 			let content = '';
 			try { content = fs.readFileSync (gitignorePath, 'utf-8'); } catch { /* 파일 없으면 새로 생성 */ }
-			if (!content.includes (entry)) {
+			if (!content.split ('\n').some ((line) => line.trim () === entry)) {
 				content += `\n${entry}\n`;
 				fs.writeFileSync (gitignorePath, content);
 			}
