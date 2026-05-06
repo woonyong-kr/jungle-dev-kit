@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.25.5] - 2026-05-06
+
+### Fixed
+- **tagSystem**: 새로고침 시 어노테이션이 전부 삭제되는 치명적 버그 수정 — `reconcileWorkspaceAnnotations`가 clean filter로 태그가 제거된 파일의 어노테이션을 삭제하던 문제 제거
+
 ## [0.25.1] - 2026-05-06
 
 ### Added
