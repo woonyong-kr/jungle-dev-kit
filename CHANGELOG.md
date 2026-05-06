@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.25.6] - 2026-05-06
+
+### Fixed
+- **tagSystem**: 태그 삭제 직후 재스캔으로 인한 재추가 방지 가드(`_deletionGuard`) 로직 구현
+- **tagSystem**: `deleteAnnotation` 줄 번호 조정 시 삭제 범위 내 annotation이 잘못 이동하던 버그 수정 (`> ann.line` → `>= endLine`)
+
 ## [0.25.5] - 2026-05-06
 
 ### Fixed

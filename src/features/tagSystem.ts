@@ -138,6 +138,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private _lastKnownHead: string | null = null;
 	private _groupByFile = false;
 	private _scanTimer: NodeJS.Timeout | null = null;
+	private _deletionGuard = new Set<string> (); // file:line:type — 삭제 직후 재추가 방지
 	private filterType: AnnotationType | null = null;
 	private filterText: string | null = null;
 	private _regionChildrenMap: Map<string, TagTreeItem[]> = new Map ();
@@ -411,7 +412,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				const ordArr = orderMapByContent.get (contentKey)!;
 				if (ordArr.length > 0) { ann.sortOrder = ordArr.shift ()!; }
 			}
-			this.annotations.push (ann);
+			const guardKey = `${ann.file}:${ann.type}:${ann.content}`;
+			if (!this._deletionGuard.has (guardKey)) {
+				this.annotations.push (ann);
+			}
 		}
 
 		// auto-review 중 줄이 아직 유효한 것만 유지
@@ -747,17 +751,25 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 						// 같은 파일의 나머지 어노테이션 줄 번호를 직접 조정 (재스캔 없이)
 						for (const other of this.annotations) {
 							if (other.id === id || other.file !== ann.file) { continue; }
-							if (other.line > ann.line) {
-								other.line = Math.max (0, other.line - deletedLines);
+							if (other.line >= endLine) {
+								// 삭제 범위 아래에 있는 annotation → 줄 번호 감소
+								other.line -= deletedLines;
 								if (other.lineEnd !== undefined) {
-									other.lineEnd = Math.max (0, other.lineEnd - deletedLines);
+									other.lineEnd -= deletedLines;
 								}
 							}
+							// 삭제 범위 내(ann.line ~ endLine-1)의 annotation은 건드리지 않음
+							// — 파일에서 줄이 삭제되므로 다음 scanDocument에서 자연스럽게 처리됨
 						}
 					}
 				}
 			} catch { /* ignore */ }
 		}
+
+		// 삭제 직후 재스캔에 의한 재추가 방지 가드
+		const guardKey = `${ann.file}:${ann.type}:${ann.content}`;
+		this._deletionGuard.add (guardKey);
+		setTimeout (() => this._deletionGuard.delete (guardKey), 2000);
 
 		this.annotations = this.annotations.filter ((a) => a.id !== id);
 		this.saveAnnotations ();

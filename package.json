@@ -2,7 +2,7 @@
   "name": "jungle-dev-kit",
   "displayName": "Annotation",
   "description": "코드 주석 태그로 팀 협업 — @todo, @bookmark, @review, @warn, @breakpoint, @note, @region 태그를 사이드바에서 관리하고, git diff에서 자동 제외",
-  "version": "0.25.5",
+  "version": "0.25.6",
   "publisher": "woonyong",
   "license": "MIT",
   "icon": "resources/icon.png",
