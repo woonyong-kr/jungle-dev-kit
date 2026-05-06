@@ -338,9 +338,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					this._onDidChangeTreeData.fire (undefined);
 				}
 			}),
-			// 파일 저장 시 스캔
+			// 파일 저장 시 스캔 — fromSave=true로 호출하여 스캔 결과를 무조건 신뢰
 			vscode.workspace.onDidSaveTextDocument ((doc) => {
-				this.scanDocument (doc);
+				this.scanDocument (doc, true);
 				this.updateAllDecorations ();
 				this.syncBreakpoints ();
 				this._onDidChangeTreeData.fire (undefined);
@@ -352,8 +352,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	 * 파일 내용을 스캔해서 annotation 목록을 갱신한다.
 	 * 주석은 파일에 그대로 유지 — 삭제하지 않음.
 	 * annotations.json에는 displayLabel 등 메타데이터만 보존.
+	 *
+	 * @param fromSave true이면 파일 저장 시점 — 스캔 결과를 무조건 신뢰한다.
+	 *                 false(기본)이면 편집 중/파일 전환 시점 — git 필터에 의한
+	 *                 일시적 태그 제거 가능성이 있으므로 P4 보존 로직 적용.
 	 */
-	private scanDocument (doc: vscode.TextDocument): void {
+	private scanDocument (doc: vscode.TextDocument, fromSave = false): void {
 		if (doc.uri.scheme !== 'file') { return; }
 		const relativePath = vscode.workspace.asRelativePath (doc.uri);
 
@@ -399,11 +403,18 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		// 파일 스캔
 		const found = this.parseAnnotationsFromDoc (doc, relativePath);
 
-		// P4: 이전에 어노테이션이 있었는데 스캔 결과가 0이면 기존 것을 보존
-		// (git clean filter가 태그를 제거한 상태에서 scanDocument가 호출된 경우)
-		if (found.length === 0 && prevNonVirtualCount > 0) {
-			// 기존 어노테이션 복원 — 스캔이 0개를 찾은 것은 소스에서 태그가
-			// 일시적으로 제거된 상태(git checkout 직후 등)일 수 있음
+		// P4: 이전에 어노테이션이 있었는데 스캔 결과가 0이면 보존 여부를 판단한다.
+		// 보존 조건: git clean filter에 의한 일시적 제거로 추정되는 경우에만.
+		// - fromSave=true (파일 저장): 사용자가 의도적으로 태그를 삭제한 것 → 스캔 결과 신뢰
+		// - doc.isDirty=true (편집 중): 사용자가 수동으로 태그를 지우고 있는 것 → 스캔 결과 신뢰
+		// - !fromSave && !isDirty: git checkout 직후 등 외부 변경 → 보존
+		const shouldPreserve = found.length === 0
+			&& prevNonVirtualCount > 0
+			&& !fromSave
+			&& !doc.isDirty;
+
+		if (shouldPreserve) {
+			// 기존 어노테이션 복원 — git 필터에 의한 일시적 제거로 추정
 			for (const prev of prevAnnotations) {
 				if (!prev.virtual) {
 					this.annotations.push (prev);
@@ -427,9 +438,21 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					if (ordArr.length > 0) { ann.sortOrder = ordArr.shift ()!; }
 				}
 				const guardKey = `${ann.file}:${ann.type}:${ann.line}:${ann.content}`;
-				if (!this._deletionGuard.has (guardKey)) {
+				if (this._deletionGuard.has (guardKey)) {
+					// guard를 소비(consume) — 이 스캔에서 한 번 방어하면 역할 완료
+					this._deletionGuard.delete (guardKey);
+				} else {
 					this.annotations.push (ann);
 				}
+			}
+		}
+
+		// 스캔 완료 후 해당 파일의 남은 guard를 정리 — 줄 번호 변경 등으로
+		// 매칭되지 못한 guard가 영구히 남는 것을 방지
+		const fileGuardPrefix = `${relativePath}:`;
+		for (const gk of this._deletionGuard) {
+			if (gk.startsWith (fileGuardPrefix)) {
+				this._deletionGuard.delete (gk);
 			}
 		}
 
@@ -802,9 +825,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 
 		// 삭제 직후 재스캔에 의한 재추가 방지 가드 (line 포함 — 동일 content 태그 충돌 방지)
+		// guard는 다음 scanDocument에서 소비(consume)되어 자동 제거됨 — 타이머 불필요
 		const guardKey = `${ann.file}:${ann.type}:${ann.line}:${ann.content}`;
 		this._deletionGuard.add (guardKey);
-		setTimeout (() => this._deletionGuard.delete (guardKey), 5000);
 
 		this.annotations = this.annotations.filter ((a) => a.id !== id);
 		this.saveAnnotations ();
@@ -858,10 +881,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 
 		// 삭제 대상을 _deletionGuard에 등록 — 재스캔 시 재추가 방지
+		// guard는 다음 scanDocument에서 소비(consume)되어 자동 제거됨
 		for (const t of targets) {
 			const gk = `${t.file}:${t.type}:${t.line}:${t.content}`;
 			this._deletionGuard.add (gk);
-			setTimeout (() => this._deletionGuard.delete (gk), 3000);
 		}
 
 		// 파일에서 주석 줄 삭제
@@ -883,10 +906,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const fileAnns = this.annotations.filter ((a) => a.file === file);
 
 		// 삭제 대상을 _deletionGuard에 등록
+		// guard는 다음 scanDocument에서 소비(consume)되어 자동 제거됨
 		for (const t of fileAnns) {
 			const gk = `${t.file}:${t.type}:${t.line}:${t.content}`;
 			this._deletionGuard.add (gk);
-			setTimeout (() => this._deletionGuard.delete (gk), 3000);
 		}
 
 		await this.removeAnnotationLinesFromFiles (fileAnns);
