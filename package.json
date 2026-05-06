@@ -2,7 +2,7 @@
   "name": "jungle-dev-kit",
   "displayName": "Annotation",
   "description": "코드 주석 태그로 팀 협업 — @todo, @bookmark, @review, @warn, @breakpoint, @note, @region 태그를 사이드바에서 관리하고, git diff에서 자동 제외",
-  "version": "0.26.0",
+  "version": "0.28.0",
   "publisher": "woonyong",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -101,22 +101,6 @@
       {
         "command": "jungleKit.undoLastCommit",
         "title": "마지막 커밋 되돌리기"
-      },
-      {
-        "command": "jungleKit.setGoal",
-        "title": "Goal 설정"
-      },
-      {
-        "command": "jungleKit.showGoal",
-        "title": "Goal 보기"
-      },
-      {
-        "command": "jungleKit.completeGoal",
-        "title": "Goal 완료 처리"
-      },
-      {
-        "command": "jungleKit.clearGoal",
-        "title": "Goal 삭제"
       },
       {
         "command": "jungleKit.resolveTagInline",
@@ -271,16 +255,6 @@
             "gpt-4o-mini"
           ],
           "description": "OpenAI model for AI features"
-        },
-        "jungleKit.goal.showStatusBar": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show the active Goal in the status bar"
-        },
-        "jungleKit.goal.includeInAI": {
-          "type": "boolean",
-          "default": true,
-          "description": "Include the active Goal in AI commit, PR, and review prompts"
         }
       }
     },
@@ -362,11 +336,6 @@
           "command": "jungleKit.createPR",
           "when": "view == jungleKit.tags",
           "group": "actions@1"
-        },
-        {
-          "command": "jungleKit.showGoal",
-          "when": "view == jungleKit.tags",
-          "group": "actions@1.5"
         },
         {
           "command": "jungleKit.generateCommitMessage",

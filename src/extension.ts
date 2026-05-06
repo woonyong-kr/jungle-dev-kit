@@ -6,8 +6,6 @@ import { EnvironmentValidator } from './features/environmentValidator';
 import { SmartCommit } from './features/smartCommit';
 import { TagSystem } from './features/tagSystem';
 import { ShadowDiff } from './features/shadowDiff';
-import { GoalTracker } from './features/goalTracker';
-
 import { PRPanel } from './features/prPanel';
 import { GdbWarnTracker } from './features/gdbWarnTracker';
 import { APIKeyManager } from './utils/apiKeyManager';
@@ -24,16 +22,14 @@ export async function activate (context: vscode.ExtensionContext) {
 	const config = new ConfigManager (context);
 	const git = new GitUtils ();
 	const apiKeys = new APIKeyManager (context);
-	const goalTracker = new GoalTracker (config);
-
 	// --- Core features ---
 	const style = new StyleEnforcer (config);
 	// localComments removed
 	const envValidator = new EnvironmentValidator (config);
-	const tagSystem = new TagSystem (config, apiKeys, goalTracker);
+	const tagSystem = new TagSystem (config, apiKeys);
 	const shadowDiff = new ShadowDiff (config, git);
-	const smartCommit = new SmartCommit (config, apiKeys, git, goalTracker);
-	const prPanel = new PRPanel (git, apiKeys, config, tagSystem, goalTracker);
+	const smartCommit = new SmartCommit (config, apiKeys, git);
+	const prPanel = new PRPanel (git, apiKeys, config, tagSystem);
 	const gdbTracker = new GdbWarnTracker ();
 
 	// --- Register tree views ---
@@ -119,11 +115,6 @@ export async function activate (context: vscode.ExtensionContext) {
 		// Undo
 		['jungleKit.undoLastCommit', () => git.undoLastCommit ()],
 
-		// Goal
-		['jungleKit.setGoal', () => goalTracker.setGoal ()],
-		['jungleKit.showGoal', () => goalTracker.showGoal ()],
-		['jungleKit.completeGoal', () => goalTracker.completeGoal ()],
-		['jungleKit.clearGoal', () => goalTracker.clearGoal ()],
 	];
 
 	for (const [id, handler] of commands) {
@@ -134,7 +125,6 @@ export async function activate (context: vscode.ExtensionContext) {
 
 	// --- Auto-activate features ---
 	const activations: [string, () => Promise<void> | void][] = [
-		['GoalTracker', () => goalTracker.activate (context)],
 		['StyleEnforcer', () => style.activate (context)],
 		['EnvironmentValidator', () => envValidator.validateOnStartup ()],
 		['TagSystem', () => tagSystem.activate (context)],

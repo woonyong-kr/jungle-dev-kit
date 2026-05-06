@@ -6,7 +6,6 @@ import { APIKeyManager } from '../utils/apiKeyManager';
 import { ConfigManager, PR_DIFF_TRUNCATE_LIMIT } from '../utils/configManager';
 import { GitHubPrClient } from '../utils/githubPrClient';
 import { TagSystem } from './tagSystem';
-import { GoalTracker } from './goalTracker';
 
 const execFileAsync = promisify (execFile);
 
@@ -34,17 +33,15 @@ export class PRPanel {
 	private apiKeys: APIKeyManager;
 	private config: ConfigManager;
 	private tagSystem: TagSystem;
-	private goalTracker: GoalTracker | null;
 	private _isCreatingPR = false;
 	private _panel: vscode.WebviewPanel | null = null;
 	private _panelState: { diff?: string; changedFiles: DiffFile[] } = { changedFiles: [] };
 
-	constructor (git: GitUtils, apiKeys: APIKeyManager, config: ConfigManager, tagSystem: TagSystem, goalTracker?: GoalTracker) {
+	constructor (git: GitUtils, apiKeys: APIKeyManager, config: ConfigManager, tagSystem: TagSystem) {
 		this.git = git;
 		this.apiKeys = apiKeys;
 		this.config = config;
 		this.tagSystem = tagSystem;
-		this.goalTracker = goalTracker || null;
 	}
 
 	async openPanel (): Promise<void> {
@@ -243,9 +240,7 @@ export class PRPanel {
 			const reviewSummary = reviewTags.length > 0
 				? reviewTags.map ((t) => `  ${t.file}:${t.line + 1} — ${t.content}`).join ('\n')
 				: '  없음';
-			const goalContext = this.goalTracker?.getGoalPromptContext ();
 			const promptSections = [
-				goalContext,
 				`브랜치: ${branch}`,
 				'',
 				'=== 변경 파일 ===',

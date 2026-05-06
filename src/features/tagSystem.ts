@@ -6,7 +6,6 @@ import { promisify } from 'util';
 import { ConfigManager, DIFF_FILE_EXTENSIONS } from '../utils/configManager';
 import { sanitizeRef } from '../utils/gitUtils';
 import { APIKeyManager } from '../utils/apiKeyManager';
-import { GoalTracker } from './goalTracker';
 
 const execAsync = promisify (execCb);
 
@@ -129,7 +128,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 	private config: ConfigManager;
 	private apiKeys: APIKeyManager | null = null;
-	private goalTracker: GoalTracker | null = null;
 	private context!: vscode.ExtensionContext;
 	private annotations: Annotation[] = [];
 	private dataFilePath: string = '';
@@ -147,10 +145,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private _onDidChangeTreeData = new vscode.EventEmitter<TagTreeItem | undefined> ();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-	constructor (config: ConfigManager, apiKeys?: APIKeyManager, goalTracker?: GoalTracker) {
+	constructor (config: ConfigManager, apiKeys?: APIKeyManager) {
 		this.config = config;
 		this.apiKeys = apiKeys || null;
-		this.goalTracker = goalTracker || null;
 	}
 
 	setTreeView (treeView: vscode.TreeView<TagTreeItem>, _context: vscode.ExtensionContext): void {
@@ -383,10 +380,16 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 		}
 
-		// 기존 해당 파일의 가상 annotation 보존 (scanDocument에서 덮어쓰지 않음)
-		const autoReviews = this.annotations.filter (
-			(a) => a.file === relativePath && a.virtual
+		// 기존 해당 파일의 annotation 백업 (P4: 캐스케이드 와이프 방지용)
+		const prevAnnotations = this.annotations.filter (
+			(a) => a.file === relativePath
 		);
+
+		// 기존 해당 파일의 가상 annotation 보존 (scanDocument에서 덮어쓰지 않음)
+		const autoReviews = prevAnnotations.filter ((a) => a.virtual);
+
+		// 기존 해당 파일의 비가상 annotation 수
+		const prevNonVirtualCount = prevAnnotations.filter ((a) => !a.virtual).length;
 
 		// 해당 파일의 annotation 제거 (가상 항목은 보존)
 		this.annotations = this.annotations.filter (
@@ -396,25 +399,37 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		// 파일 스캔
 		const found = this.parseAnnotationsFromDoc (doc, relativePath);
 
-		for (const ann of found) {
-			// displayLabel, sortOrder 복원 (1차: type+line, 2차 fallback: type+content)
-			const key = `${ann.type}:${ann.line}`;
-			const contentKey = `${ann.type}:${ann.content}`;
-			if (labelMap.has (key)) {
-				ann.displayLabel = labelMap.get (key)!;
-			} else if (labelMapByContent.has (contentKey)) {
-				const lblArr = labelMapByContent.get (contentKey)!;
-				if (lblArr.length > 0) { ann.displayLabel = lblArr.shift ()!; }
+		// P4: 이전에 어노테이션이 있었는데 스캔 결과가 0이면 기존 것을 보존
+		// (git clean filter가 태그를 제거한 상태에서 scanDocument가 호출된 경우)
+		if (found.length === 0 && prevNonVirtualCount > 0) {
+			// 기존 어노테이션 복원 — 스캔이 0개를 찾은 것은 소스에서 태그가
+			// 일시적으로 제거된 상태(git checkout 직후 등)일 수 있음
+			for (const prev of prevAnnotations) {
+				if (!prev.virtual) {
+					this.annotations.push (prev);
+				}
 			}
-			if (orderMap.has (key)) {
-				ann.sortOrder = orderMap.get (key)!;
-			} else if (orderMapByContent.has (contentKey)) {
-				const ordArr = orderMapByContent.get (contentKey)!;
-				if (ordArr.length > 0) { ann.sortOrder = ordArr.shift ()!; }
-			}
-			const guardKey = `${ann.file}:${ann.type}:${ann.line}:${ann.content}`;
-			if (!this._deletionGuard.has (guardKey)) {
-				this.annotations.push (ann);
+		} else {
+			for (const ann of found) {
+				// displayLabel, sortOrder 복원 (1차: type+line, 2차 fallback: type+content)
+				const key = `${ann.type}:${ann.line}`;
+				const contentKey = `${ann.type}:${ann.content}`;
+				if (labelMap.has (key)) {
+					ann.displayLabel = labelMap.get (key)!;
+				} else if (labelMapByContent.has (contentKey)) {
+					const lblArr = labelMapByContent.get (contentKey)!;
+					if (lblArr.length > 0) { ann.displayLabel = lblArr.shift ()!; }
+				}
+				if (orderMap.has (key)) {
+					ann.sortOrder = orderMap.get (key)!;
+				} else if (orderMapByContent.has (contentKey)) {
+					const ordArr = orderMapByContent.get (contentKey)!;
+					if (ordArr.length > 0) { ann.sortOrder = ordArr.shift ()!; }
+				}
+				const guardKey = `${ann.file}:${ann.type}:${ann.line}:${ann.content}`;
+				if (!this._deletionGuard.has (guardKey)) {
+					this.annotations.push (ann);
+				}
 			}
 		}
 
@@ -789,7 +804,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		// 삭제 직후 재스캔에 의한 재추가 방지 가드 (line 포함 — 동일 content 태그 충돌 방지)
 		const guardKey = `${ann.file}:${ann.type}:${ann.line}:${ann.content}`;
 		this._deletionGuard.add (guardKey);
-		setTimeout (() => this._deletionGuard.delete (guardKey), 2000);
+		setTimeout (() => this._deletionGuard.delete (guardKey), 5000);
 
 		this.annotations = this.annotations.filter ((a) => a.id !== id);
 		this.saveAnnotations ();
@@ -2101,9 +2116,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			let OpenAI: any;
 			try { OpenAI = (await import ('openai')).default; } catch { return ''; }
 			const client = new OpenAI ({ apiKey: key });
-			const goalContext = this.goalTracker?.getGoalPromptContext ();
 			const userPrompt = [
-				goalContext,
 				`파일: ${add.file}`,
 				`새로 추가된 코드:\n${add.code}`,
 				`주변 코드:\n${context}`,
@@ -2170,12 +2183,22 @@ process.stdin.on('end', () => {
   let skip = false;
   for (const line of lines) {
     if (skip) {
-      if (line.includes('*/')) { skip = false; }
+      const closeIdx = line.indexOf('*/');
+      if (closeIdx !== -1) {
+        skip = false;
+        // P3: */ 뒤에 코드가 있으면 보존
+        const after = line.substring(closeIdx + 2);
+        if (after.trim().length > 0) { out.push(after); }
+      }
       continue;
     }
     if (singleLineRe.test(line)) { continue; }
     if (blockSingleRe.test(line)) { continue; }
-    if (blockStartRe.test(line)) { skip = true; continue; }
+    // P2: blockStartRe 매칭 시 같은 줄에 */가 있으면 skip하지 않음
+    if (blockStartRe.test(line)) {
+      if (!line.includes('*/')) { skip = true; }
+      continue;
+    }
     out.push(line);
   }
   let result = out.join('\\n');
@@ -2216,33 +2239,35 @@ process.stdin.on('end', () => {
 				'',
 				"    const lines = buf.split('\\n');",
 				'',
-				'    // 이중 삽입 방지: 줄 시작(^)에 태그 패턴이 있어야만 매칭 (문자열 리터럴 내 패턴 무시)',
+				'    // P1: 이중 삽입 방지 — 각 어노테이션 삽입 위치의 인접 줄만 개별 체크',
 				"    const tags = ['todo','bookmark','review','warn','breakpoint','note','region','endregion'];",
 				"    const tagRe = new RegExp('^\\\\s*(\\\\/\\\\/|/\\\\*)\\\\s*@(' + tags.join('|') + ')(\\\\s|\\\\*|$)');",
-				'    if (lines.some(l => tagRe.test(l))) { process.stdout.write(buf); return; }',
 				'',
 				'    const sorted = fileAnnotations',
 				"      .filter(a => typeof a.line === 'number' && a.line >= 0)",
 				'      .sort((a, b) => a.line - b.line);',
 				'',
+				'    let offset = 0;',
 				'    for (const ann of sorted) {',
-				'      const insertAt = ann.line;',
+				'      const insertAt = ann.line + offset;',
 				'      if (insertAt > lines.length) { continue; }',
+				'      // P1: 삽입 위치의 인접 줄에 이미 같은 태그가 있으면 건너뜀',
+				'      const checkStart = Math.max(0, insertAt - 1);',
+				'      const checkEnd = Math.min(lines.length - 1, insertAt + 1);',
+				'      let alreadyExists = false;',
+				'      for (let ci = checkStart; ci <= checkEnd; ci++) {',
+				'        if (tagRe.test(lines[ci])) { alreadyExists = true; break; }',
+				'      }',
+				'      if (alreadyExists) { continue; }',
 				'      const refIdx = Math.min(insertAt, lines.length - 1);',
 				"      const indent = (lines[refIdx] || '').match(/^(\\s*)/)[1];",
 				"      const safe = (ann.content || '').replace(/\\*\\//g, '* /');",
 				"      const type = ann.type || 'todo';",
-				'      let cls = [];',
-				'      if (ann.lineEnd !== undefined && ann.lineEnd > ann.line) {',
-				'        const total = ann.lineEnd - ann.line + 1;',
-				"        cls.push(indent + '/* @' + type + ' ' + safe);",
-				"        for (let k = 0; k < total - 2; k++) { cls.push(indent + '   '); }",
-				"        cls.push(indent + '*/');",
-				'      } else {',
-				"        cls.push(indent + '/* @' + type + ' ' + (safe && safe !== type ? safe + ' ' : '') + '*/');",
-				'      }',
+				'      // P6: 항상 한 줄짜리 주석으로 복원 (멀티라인 빈 줄 생성 방지)',
+				"      const comment = indent + '/* @' + type + ' ' + (safe && safe !== type ? safe + ' ' : '') + '*/';",
 				'      if (insertAt >= 0 && insertAt <= lines.length) {',
-				'        lines.splice(insertAt, 0, ...cls);',
+				'        lines.splice(insertAt, 0, comment);',
+				'        offset++;',
 				'      }',
 				'    }',
 				"    process.stdout.write(lines.join('\\n'));",
