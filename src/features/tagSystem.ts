@@ -1751,8 +1751,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				{ cwd: root }
 			);
 			const commitAuthor = authorOut.trim ();
-			const myName = await this.getAuthorName ();
-			if (commitAuthor === myName) { return; }
 
 			const additions = this.parseDiffAdditions (diffOutput);
 			if (additions.length === 0) { return; }
@@ -2270,28 +2268,18 @@ process.stdin.on('end', () => {
 				"      .filter(a => typeof a.line === 'number' && a.line >= 0)",
 				'      .sort((a, b) => a.line - b.line);',
 				'',
-				'    let offset = 0;',
 				'    for (const ann of sorted) {',
-				'      const insertAt = ann.line + offset;',
-				'      if (insertAt > lines.length) { continue; }',
-				'      // P1: 삽입 위치의 인접 줄에 이미 같은 태그가 있으면 건너뜀',
-				'      const checkStart = Math.max(0, insertAt - 1);',
-				'      const checkEnd = Math.min(lines.length - 1, insertAt + 1);',
-				'      let alreadyExists = false;',
-				'      for (let ci = checkStart; ci <= checkEnd; ci++) {',
-				'        if (tagRe.test(lines[ci])) { alreadyExists = true; break; }',
-				'      }',
-				'      if (alreadyExists) { continue; }',
+				'      const insertAt = ann.line;',
+				'      if (insertAt < 0 || insertAt > lines.length) { continue; }',
+				'      // P1: 정확한 삽입 위치에 이미 태그가 있으면 건너뜀 (인접 줄은 검사하지 않음)',
+				'      if (insertAt < lines.length && tagRe.test(lines[insertAt])) { continue; }',
 				'      const refIdx = Math.min(insertAt, lines.length - 1);',
 				"      const indent = (lines[refIdx] || '').match(/^(\\s*)/)[1];",
 				"      const safe = (ann.content || '').replace(/\\*\\//g, '* /');",
 				"      const type = ann.type || 'todo';",
 				'      // P6: 항상 한 줄짜리 주석으로 복원 (멀티라인 빈 줄 생성 방지)',
 				"      const comment = indent + '/* @' + type + ' ' + (safe && safe !== type ? safe + ' ' : '') + '*/';",
-				'      if (insertAt >= 0 && insertAt <= lines.length) {',
-				'        lines.splice(insertAt, 0, comment);',
-				'        offset++;',
-				'      }',
+				'      lines.splice(insertAt, 0, comment);',
 				'    }',
 				"    process.stdout.write(lines.join('\\n'));",
 				'  } catch (e) {',
