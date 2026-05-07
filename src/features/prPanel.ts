@@ -977,14 +977,14 @@ export class PRPanel {
 			const title = document.getElementById('title').value;
 			if (!title.trim()) {
 				document.getElementById('messageArea').innerHTML =
-					'<div class="message error"><span class="msg-icon">&#10060;</span> 제목을 입력하세요.</div>';
+					'<div class="message error"><span class="msg-icon">&#10007;</span> 제목을 입력하세요.</div>';
 				return;
 			}
 			// 버튼 비활성화 + 로딩 표시
 			const btn = document.querySelector('.btn-create');
 			if (btn) { btn.disabled = true; btn.textContent = 'PR 생성 중...'; }
 			document.getElementById('messageArea').innerHTML =
-				'<div class="message" style="color:#90CAF9;">&#9203; PR 생성 중... 잠시 기다려주세요.</div>';
+				'<div class="message" style="color:#90CAF9;">PR 생성 중... 잠시 기다려주세요.</div>';
 			vscode.postMessage({
 				command: 'createPR',
 				data: {
@@ -1010,7 +1010,7 @@ export class PRPanel {
 					setTimeout(() => { area.innerHTML = ''; }, 3000);
 					break;
 				case 'error': {
-					area.innerHTML = '<div class="message error"><span class="msg-icon">&#10060;</span> ' + esc(msg.text) + '</div>';
+					area.innerHTML = '<div class="message error"><span class="msg-icon">&#10007;</span> ' + esc(msg.text) + '</div>';
 					const errBtn = document.querySelector('.btn-create');
 					if (errBtn) { errBtn.disabled = false; errBtn.textContent = 'PR 만들기'; }
 					break;
@@ -1026,7 +1026,7 @@ export class PRPanel {
 					break;
 				}
 				case 'status':
-					area.innerHTML = '<div class="message" style="color:#90CAF9;">&#9203; ' + esc(msg.text) + '</div>';
+					area.innerHTML = '<div class="message" style="color:#90CAF9;">' + esc(msg.text) + '</div>';
 					break;
 				case 'existingPR': {
 					const prHtml = '<a href="' + esc(msg.url) + '" target="_blank">' + esc(msg.title || msg.url) + '</a>';
