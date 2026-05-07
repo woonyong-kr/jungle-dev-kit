@@ -137,6 +137,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private _groupByFile = false;
 	private _scanTimer: NodeJS.Timeout | null = null;
 	private _deletionGuard = new Set<string> (); // file:line:type — 삭제 직후 재추가 방지
+	private _p4Active = new Set<string> ();      // P4 보존 활성 파일 — fromSave에서도 보존 유지
+	private _p4Restoring = false;                 // P4 파일 복원 중 재진입 방지
 	private filterType: AnnotationType | null = null;
 	private filterText: string | null = null;
 	private _regionChildrenMap: Map<string, TagTreeItem[]> = new Map ();
@@ -319,6 +321,8 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		context.subscriptions.push (
 			vscode.workspace.onDidChangeTextDocument ((event) => {
 				if (event.document.uri.scheme !== 'file') { return; }
+				// P4 파일 복원 중이면 스캔 건너뛰기 — 복원 자체가 변경 이벤트를 발생시킴
+				if (this._p4Restoring) { return; }
 				if (this._scanTimer) { clearTimeout (this._scanTimer); }
 				this._scanTimer = setTimeout (() => {
 					this.scanDocument (event.document);
@@ -332,7 +336,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}),
 			// 에디터 전환 시 데코레이션 적용
 			vscode.window.onDidChangeActiveTextEditor ((editor) => {
-				if (editor) {
+				if (editor && !this._p4Restoring) {
 					this.scanDocument (editor.document);
 					this.updateEditorDecorations (editor);
 					this._onDidChangeTreeData.fire (undefined);
@@ -340,6 +344,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}),
 			// 파일 저장 시 스캔 — fromSave=true로 호출하여 스캔 결과를 무조건 신뢰
 			vscode.workspace.onDidSaveTextDocument ((doc) => {
+				if (this._p4Restoring) { return; }
 				this.scanDocument (doc, true);
 				this.updateAllDecorations ();
 				this.syncBreakpoints ();
@@ -403,24 +408,33 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		// 파일 스캔
 		const found = this.parseAnnotationsFromDoc (doc, relativePath);
 
-		// P4: 이전에 어노테이션이 있었는데 스캔 결과가 0이면 보존 여부를 판단한다.
-		// 보존 조건: git clean filter에 의한 일시적 제거로 추정되는 경우에만.
-		// - fromSave=true (파일 저장): 사용자가 의도적으로 태그를 삭제한 것 → 스캔 결과 신뢰
-		// - doc.isDirty=true (편집 중): 사용자가 수동으로 태그를 지우고 있는 것 → 스캔 결과 신뢰
-		// - !fromSave && !isDirty: git checkout 직후 등 외부 변경 → 보존
+		// P4: 파일에서 어노테이션이 사라졌을 때 보존 여부를 판단한다.
+		// - 전체 소실 (found=0): git checkout/rebase/stash 등 외부 변경으로 추정
+		// - 부분 소실 (found < prev): smudge 일부 실패 또는 외부 도구 간섭
+		// _p4Active가 활성이면 fromSave=true에서도 보존한다.
+		// 사이드바 X / clearAll 삭제는 _deletionGuard + _p4Active.delete로 처리.
 		const shouldPreserve = found.length === 0
 			&& prevNonVirtualCount > 0
-			&& !fromSave
-			&& !doc.isDirty;
+			&& (!fromSave || this._p4Active.has (relativePath));
 
 		if (shouldPreserve) {
-			// 기존 어노테이션 복원 — git 필터에 의한 일시적 제거로 추정
+			this._p4Active.add (relativePath);
+			// 기존 어노테이션 전체 복원 — git 필터에 의한 일시적 제거로 추정
 			for (const prev of prevAnnotations) {
 				if (!prev.virtual) {
 					this.annotations.push (prev);
 				}
 			}
+			// P4 보존 시 파일에도 어노테이션 복원 — 다음 저장에서 소실 방지
+			if (!this._p4Restoring) {
+				this.restoreAnnotationsToFile (doc, prevAnnotations.filter ((a) => !a.virtual));
+			}
 		} else {
+			this._p4Active.delete (relativePath);
+
+			// 스캔 결과를 처리하되, 부분 소실된 어노테이션 복원 시도
+			const missingAnns: Annotation[] = [];
+
 			for (const ann of found) {
 				// displayLabel, sortOrder 복원 (1차: type+line, 2차 fallback: type+content)
 				const key = `${ann.type}:${ann.line}`;
@@ -445,6 +459,47 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 					this.annotations.push (ann);
 				}
 			}
+
+			// 부분 소실 복원: fromSave가 아닐 때, prev에 있었지만 found에 없는 어노테이션
+			if (!fromSave && found.length > 0 && found.length < prevNonVirtualCount) {
+				// 소비 기반 매칭: prev를 type:content별로 그룹화하고,
+				// found 각 항목이 매칭하는 prev를 소비. 남은 prev가 누락 대상.
+				const prevByKey = new Map<string, Annotation[]> ();
+				for (const prev of prevAnnotations) {
+					if (prev.virtual) { continue; }
+					const ck = `${prev.type}:${prev.content}`;
+					const arr = prevByKey.get (ck) || [];
+					arr.push (prev);
+					prevByKey.set (ck, arr);
+				}
+				// found의 각 항목으로 매칭되는 prev를 소비 (줄 번호 우선 매칭)
+				for (const f of found) {
+					const ck = `${f.type}:${f.content}`;
+					const prevArr = prevByKey.get (ck);
+					if (prevArr && prevArr.length > 0) {
+						const matchIdx = prevArr.findIndex ((p) => p.line === f.line);
+						if (matchIdx >= 0) {
+							prevArr.splice (matchIdx, 1);
+						} else {
+							prevArr.shift (); // 줄 번호 불일치 시 아무거나 소비
+						}
+					}
+				}
+				// 소비되지 않은 prev → 누락된 어노테이션
+				for (const [, prevArr] of prevByKey) {
+					for (const prev of prevArr) {
+						const gk = `${prev.file}:${prev.type}:${prev.line}:${prev.content}`;
+						if (!this._deletionGuard.has (gk)) {
+							missingAnns.push (prev);
+							this.annotations.push (prev);
+						}
+					}
+				}
+				// 누락된 어노테이션을 파일에 복원
+				if (missingAnns.length > 0 && !this._p4Restoring) {
+					this.restoreAnnotationsToFile (doc, missingAnns);
+				}
+			}
 		}
 
 		// 스캔 완료 후 해당 파일의 남은 guard를 정리 — 줄 번호 변경 등으로
@@ -457,16 +512,61 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 
 		// auto-review 중 줄이 아직 유효한 것만 유지
+		// 같은 줄에 수동 태그가 삽입되었으면 virtual annotation을 한 줄 아래로 이동
 		for (const ar of autoReviews) {
-			if (ar.line < doc.lineCount) {
-				// 아직 유효하면 유지
-				if (!this.annotations.some ((a) => a.id === ar.id)) {
-					this.annotations.push (ar);
-				}
+			if (ar.line >= doc.lineCount) { continue; }
+			if (this.annotations.some ((a) => a.id === ar.id)) { continue; }
+			// 같은 줄에 비가상 어노테이션이 있으면 충돌 — virtual을 한 줄 아래로
+			const conflict = this.annotations.some (
+				(a) => a.file === ar.file && a.line === ar.line && !a.virtual
+			);
+			if (conflict && ar.line + 1 < doc.lineCount) {
+				ar.line += 1;
 			}
+			this.annotations.push (ar);
 		}
 
 		this.saveAnnotations ();
+	}
+
+	/**
+	 * P4 보존 시 파일에 어노테이션 주석을 복원한다.
+	 * git 작업 등으로 파일에서 주석이 사라졌을 때 메모리에서 파일로 되돌린다.
+	 * 역순(아래→위) 삽입으로 줄 번호 밀림을 방지한다.
+	 */
+	private restoreAnnotationsToFile (doc: vscode.TextDocument, anns: Annotation[]): void {
+		if (anns.length === 0) { return; }
+		const sorted = [...anns]
+			.filter ((a) => typeof a.line === 'number' && a.line >= 0)
+			.sort ((a, b) => b.line - a.line); // 역순 — offset 밀림 방지
+		const edit = new vscode.WorkspaceEdit ();
+		for (const ann of sorted) {
+			const insertAt = Math.min (ann.line, doc.lineCount);
+			const refIdx = Math.min (insertAt, doc.lineCount - 1);
+			const indent = refIdx >= 0
+				? (doc.lineAt (refIdx).text.match (/^(\s*)/) || ['', ''])[1]
+				: '';
+			const safe = (ann.content || '').replace (/\*\//g, '* /');
+			const type = ann.type || 'todo';
+			const comment = safe && safe !== type
+				? `${indent}/* @${type} ${safe} */`
+				: `${indent}/* @${type} */`;
+			edit.insert (doc.uri, new vscode.Position (insertAt, 0), comment + '\n');
+		}
+		this._p4Restoring = true;
+		vscode.workspace.applyEdit (edit).then (() => {
+			const relativePath = vscode.workspace.asRelativePath (doc.uri);
+			this._p4Active.delete (relativePath);
+			this._p4Restoring = false;
+			// 복원 완료 후 재스캔 — 메모리(P4 백업)와 파일(실제 삽입 위치)을 동기화
+			// fromSave=true로 호출하여 P4 보존을 우회 — doc 반영이 지연될 경우의
+			// 무한 루프(found=0 → P4 재활성화 → 재복원 → …)를 방지
+			this.scanDocument (doc, true);
+			this.updateAllDecorations ();
+			this._onDidChangeTreeData.fire (undefined);
+		}, () => {
+			this._p4Restoring = false;
+		});
 	}
 
 	private parseAnnotationsFromDoc (doc: vscode.TextDocument, relativePath: string): Annotation[] {
@@ -586,7 +686,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			try {
 				const doc = await vscode.workspace.openTextDocument (fileUri);
 				const text = doc.getText ();
-				if (tagPattern.test (text)) {
+				// 파일에 태그가 있거나, annotations.json에 어노테이션이 있으면 스캔
+				// 후자는 git이 파일을 교체해서 태그가 사라진 경우 P4 복원을 트리거
+				const hasAnnotationsInMemory = this.annotations.some (
+					(a) => a.file === relativePath && !a.virtual
+				);
+				if (tagPattern.test (text) || hasAnnotationsInMemory) {
 					this.scanDocument (doc);
 				}
 			} catch {
@@ -718,6 +823,19 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			return;
 		}
 
+		// 삽입된 줄 수만큼 같은 파일의 virtual 어노테이션 줄 번호를 조정
+		// addTag는 line 위에 새 줄을 삽입하므로 기존 코드가 아래로 밀린다
+		const insertedLines = commentText.split ('\n').length - 1;
+		if (insertedLines > 0) {
+			const relPath = vscode.workspace.asRelativePath (editor.document.uri);
+			for (const a of this.annotations) {
+				if (a.file === relPath && a.virtual && a.line >= line) {
+					a.line += insertedLines;
+					if (a.lineEnd !== undefined) { a.lineEnd += insertedLines; }
+				}
+			}
+		}
+
 		// 스캔이 자동으로 트리거되므로 별도 처리 불필요
 		console.log (`[Annotation] @${type} 어노테이션 추가`);
 	}
@@ -749,9 +867,11 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const cursorLine = editor.selection.active.line;
 		const relativePath = vscode.workspace.asRelativePath (doc.uri);
 
-		const ann = this.annotations.find (
+		const matches = this.annotations.filter (
 			(a) => a.file === relativePath && cursorLine >= a.line && cursorLine <= (a.lineEnd ?? a.line)
 		);
+		// virtual 태그보다 수동(파일 내) 태그를 우선 삭제
+		const ann = matches.find ((a) => !a.virtual) || matches[0];
 
 		if (!ann) {
 			vscode.window.showInformationMessage ('현재 줄에 어노테이션 태그가 없습니다.');
@@ -768,6 +888,9 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	async deleteAnnotation (id: string): Promise<void> {
 		const ann = this.annotations.find ((a) => a.id === id);
 		if (!ann) { return; }
+
+		// P4 보존 해제 — 명시적 삭제이므로 복원 불필요
+		this._p4Active.delete (ann.file);
 
 		// 디바운스된 스캔 타이머 취소 — 줄 번호 밀림으로 인한 재추가 방지
 		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
@@ -880,6 +1003,11 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		// 디바운스된 스캔 타이머 취소 — 삭제 직후 재스캔으로 복원되는 것 방지
 		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 
+		// P4 보존 해제 — 명시적 삭제이므로 복원 불필요
+		for (const t of targets) {
+			this._p4Active.delete (t.file);
+		}
+
 		// 삭제 대상을 _deletionGuard에 등록 — 재스캔 시 재추가 방지
 		// guard는 다음 scanDocument에서 소비(consume)되어 자동 제거됨
 		for (const t of targets) {
@@ -894,14 +1022,37 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
 
 		const targetIds = new Set (targets.map ((a) => a.id));
+		// 삭제 대상 파일 목록 보존 — 삭제 후 남은 어노테이션 줄 번호 재스캔용
+		const affectedFiles = new Set (targets.map ((a) => a.file));
 		this.annotations = this.annotations.filter ((a) => !targetIds.has (a.id));
 		this.saveAnnotations ();
+
+		// 삭제된 파일에 남은 어노테이션이 있으면 재스캔하여 줄 번호 동기화
+		// (필터 삭제 시 같은 파일의 다른 타입 어노테이션 줄 번호가 밀림)
+		const root = this.config.getWorkspaceRoot ();
+		if (root) {
+			for (const file of affectedFiles) {
+				const hasRemaining = this.annotations.some ((a) => a.file === file);
+				if (hasRemaining) {
+					try {
+						const doc = await vscode.workspace.openTextDocument (
+							vscode.Uri.file (path.join (root, file))
+						);
+						this.scanDocument (doc);
+					} catch { /* 파일 열기 실패 무시 */ }
+				}
+			}
+		}
+
 		this.updateAllDecorations ();
 		this._onDidChangeTreeData.fire (undefined);
 	}
 
 	async clearFileAnnotations (file: string): Promise<void> {
 		if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
+
+		// P4 보존 해제 — 명시적 삭제이므로 복원 불필요
+		this._p4Active.delete (file);
 
 		const fileAnns = this.annotations.filter ((a) => a.file === file);
 
@@ -2462,7 +2613,9 @@ process.stdin.on('end', () => {
 		if (!fs.existsSync (dir)) {
 			fs.mkdirSync (dir, { recursive: true });
 		}
-		fs.writeFileSync (filePath, JSON.stringify ({ version: 1, shortcuts }, null, 2));
+		const tmpPath = filePath + '.tmp';
+		fs.writeFileSync (tmpPath, JSON.stringify ({ version: 1, shortcuts }, null, 2));
+		fs.renameSync (tmpPath, filePath);
 	}
 
 	private shortcutPanel: vscode.WebviewPanel | undefined;
