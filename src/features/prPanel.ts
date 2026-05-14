@@ -165,11 +165,13 @@ export class PRPanel {
 		const root = this.config.getWorkspaceRoot ();
 		if (!root) { return; }
 		try {
-			const client = await GitHubPrClient.resolve (root);
 			const branch = await this.git.getCurrentBranch ();
-			if (!client || !client.hasToken || !branch) { return; }
+			if (!branch) { return; }
 			panel.webview.postMessage ({ command: 'status', text: '기존 PR 확인 중...' });
-			const existingPr = await client.findExistingPullRequest (branch);
+			const client = await GitHubPrClient.resolve (root);
+			const existingPr = client && client.hasToken
+				? await client.findExistingPullRequest (branch)
+				: await this.findExistingPullRequestWithGh (root, branch);
 			if (!this._panel || !existingPr) { return; }
 			if (existingPr.state === 'open' && existingPr.html_url) {
 				panel.webview.postMessage ({
@@ -180,6 +182,28 @@ export class PRPanel {
 			}
 		} catch (err: any) {
 			console.log ('[Annotation] checkExistingPR skipped:', err?.message || 'api not available');
+		}
+	}
+
+	private async findExistingPullRequestWithGh (
+		root: string,
+		branch: string
+	): Promise<{ state: string; html_url: string; title: string } | null> {
+		try {
+			// gh pr view fallback: 사용자가 gh CLI 인증을 이미 해둔 환경을 지원한다.
+			const { stdout } = await execFileAsync ('gh', ['pr', 'view', branch, '--json', 'url,title,state'], {
+				cwd: root,
+				timeout: 15000,
+			});
+			const parsed = JSON.parse (stdout || '{}');
+			if (!parsed.url) { return null; }
+			return {
+				state: String (parsed.state || '').toLowerCase (),
+				html_url: parsed.url,
+				title: parsed.title || '',
+			};
+		} catch {
+			return null;
 		}
 	}
 

@@ -120,13 +120,11 @@ export class StyleEnforcer {
 		);
 
 		if (autoCreateClangFormat) {
-			if (!fs.existsSync (clangFormatPath)) {
-				try {
-					fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
-					console.log ('[Annotation] .clang-format 생성 (워크스페이스 루트)');
-				} catch (err) {
-					console.warn ('[Annotation] .clang-format 쓰기 실패 (읽기 전용 파일시스템?):', err);
-				}
+			try {
+				fs.writeFileSync (clangFormatPath, PINTOS_CLANG_FORMAT);
+				console.log ('[Annotation] .clang-format 갱신 (워크스페이스 루트)');
+			} catch (err) {
+				console.warn ('[Annotation] .clang-format 쓰기 실패 (읽기 전용 파일시스템?):', err);
 			}
 		}
 

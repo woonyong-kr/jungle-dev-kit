@@ -120,7 +120,7 @@ export class GdbWarnTracker {
 
 			// 이미 해당 줄에 @warn 이 있으면 스킵
 			const existingText = doc.lineAt (targetLine).text;
-			if (existingText.match (/\/\*\s*@warn\b/)) { return; }
+			if (existingText.match (/^\s*(?:\/\/|\/\*)\s*@warn\b/)) { return; }
 
 			// indent 결정
 			const indent = existingText.match (/^(\s*)/)?.[1] || '';

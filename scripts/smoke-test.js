@@ -28,6 +28,7 @@ function main() {
 
 	const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
 	const extensionSource = readText('src/extension.ts');
+	const tagSystemSource = readText('src/features/tagSystem.ts');
 	const readme = readText('README.md');
 	const vscodeIgnore = readText('.vscodeignore');
 
@@ -38,6 +39,16 @@ function main() {
 		assert(
 			registeredCommands.has(commandId),
 			`package.json에 선언된 명령이 extension.ts에 등록되지 않았습니다: ${commandId}`
+		);
+	}
+
+	const tagTypesMatch = tagSystemSource.match(/ALL_TAG_TYPES:\s*AnnotationType\[\]\s*=\s*\[([^\]]+)\]/);
+	assert(tagTypesMatch, 'ALL_TAG_TYPES 선언을 찾을 수 없습니다.');
+	const tagTypes = [...tagTypesMatch[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+	for (const tagType of tagTypes) {
+		assert(
+			fs.existsSync(path.join(process.cwd(), 'resources', 'icons', `${tagType}.svg`)),
+			`태그 아이콘이 없습니다: resources/icons/${tagType}.svg`
 		);
 	}
 

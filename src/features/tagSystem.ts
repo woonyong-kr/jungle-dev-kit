@@ -4,6 +4,7 @@ import * as path from 'path';
 import { exec as execCb } from 'child_process';
 import { promisify } from 'util';
 import { ConfigManager, DIFF_FILE_EXTENSIONS } from '../utils/configManager';
+import { reconcileWorkspaceAnnotations } from '../utils/annotationReconciler';
 import { sanitizeRef } from '../utils/gitUtils';
 import { APIKeyManager } from '../utils/apiKeyManager';
 
@@ -47,6 +48,7 @@ interface Annotation {
 	line: number;
 	lineEnd?: number;  // 여러 줄 블록 주석의 끝 줄 (단일 줄이면 line과 동일)
 	content: string;
+	hasContent?: boolean; // false이면 빈 태그로 작성된 항목
 	displayLabel: string | null;  // 사이드바 표시용 커스텀 제목
 	createdAt: string;
 	commitHash: string | null;
@@ -118,8 +120,8 @@ const ALL_TAG_TYPES: AnnotationType[] = ['bookmark', 'todo', 'review', 'warn', '
 const SIDEBAR_TAG_TYPES: AnnotationType[] = ['bookmark', 'todo', 'review', 'warn', 'breakpoint', 'region'];
 
 // 주석 패턴 (파일 스캔용)
-const SINGLE_LINE_RE = /^(\s*)\/\/\s*@(bookmark|todo|review|warn|breakpoint|note|region|endregion)(?:\s+(.+))?$/;
-const BLOCK_SINGLE_RE = /^(\s*)\/\*\s*@(bookmark|todo|review|warn|breakpoint|note|region|endregion)(?:\s+(.+?))?\s*\*\/$/;
+const SINGLE_LINE_RE = /^(\s*)\/\/\s*@(bookmark|todo|review|warn|breakpoint|note|region|endregion)(?:\s+(.*?))?\s*$/;
+const BLOCK_SINGLE_RE = /^(\s*)\/\*\s*@(bookmark|todo|review|warn|breakpoint|note|region|endregion)(?:\s+(.*?))?\s*\*\/\s*$/;
 const BLOCK_START_RE = /^(\s*)\/\*\s*@(bookmark|todo|review|warn|breakpoint|note|region|endregion)\b(.*)$/;
 
 export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.TreeDragAndDropController<TagTreeItem> {
@@ -323,6 +325,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				if (event.document.uri.scheme !== 'file') { return; }
 				// P4 파일 복원 중이면 스캔 건너뛰기 — 복원 자체가 변경 이벤트를 발생시킴
 				if (this._p4Restoring) { return; }
+				this.warnOnNearbyWarnEdit (event.document, event.contentChanges);
 				if (this._scanTimer) { clearTimeout (this._scanTimer); }
 				this._scanTimer = setTimeout (() => {
 					this.scanDocument (event.document);
@@ -638,7 +641,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			}
 
 			if (!type) { continue; }
-			if (!content) { content = type; }
+			const hasContent = content.trim ().length > 0;
 
 			results.push ({
 				id: this.generateId (),
@@ -647,6 +650,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				line: i,
 				lineEnd: blockEndLine,
 				content,
+				hasContent,
 				displayLabel: null,
 				createdAt: new Date ().toISOString (),
 				commitHash: null,
@@ -676,9 +680,12 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	private async scanWorkspaceAnnotations (forceRescan = false): Promise<void> {
 		const files = await vscode.workspace.findFiles (WORKSPACE_SCAN_GLOB, WORKSPACE_SCAN_EXCLUDE);
 		const tagPattern = /@(bookmark|todo|review|warn|breakpoint|note|region|endregion)\b/;
+		const discoveredFiles = new Set<string> ();
+		const taggedFiles = new Set<string> ();
 
 		for (const fileUri of files) {
 			const relativePath = vscode.workspace.asRelativePath (fileUri);
+			discoveredFiles.add (relativePath);
 			// forceRescan이 아니면, 이미 스캔 완료된 파일 건너뛰기
 			if (!forceRescan && this.annotations.some ((a) => a.file === relativePath && !a.virtual)) {
 				continue;
@@ -686,16 +693,28 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			try {
 				const doc = await vscode.workspace.openTextDocument (fileUri);
 				const text = doc.getText ();
+				const hasTagText = tagPattern.test (text);
+				if (hasTagText) {
+					taggedFiles.add (relativePath);
+				}
 				// 파일에 태그가 있거나, annotations.json에 어노테이션이 있으면 스캔
 				// 후자는 git이 파일을 교체해서 태그가 사라진 경우 P4 복원을 트리거
 				const hasAnnotationsInMemory = this.annotations.some (
 					(a) => a.file === relativePath && !a.virtual
 				);
-				if (tagPattern.test (text) || hasAnnotationsInMemory) {
-					this.scanDocument (doc);
+				if (hasTagText || (hasAnnotationsInMemory && !forceRescan)) {
+					this.scanDocument (doc, forceRescan);
 				}
 			} catch {
 				// 파일 열기 실패 무시
+			}
+		}
+
+		if (forceRescan) {
+			const reconciled = reconcileWorkspaceAnnotations (this.annotations, discoveredFiles, taggedFiles);
+			if (reconciled.length !== this.annotations.length) {
+				this.annotations = reconciled;
+				this.saveAnnotations ();
 			}
 		}
 	}
@@ -761,7 +780,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			const firstLineText = editor.document.lineAt (ann.line);
 
 			const hoverLines = [
-				`**@${ann.type}** ${ann.displayLabel || ann.content}`,
+				`**@${ann.type}** ${this.getAnnotationLabel (ann)}`,
 				`클릭하여 사이드바에서 확인`,
 			];
 			if (ann.commitHash) {
@@ -799,7 +818,14 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 	async addTag (type: AnnotationType): Promise<void> {
 		const editor = vscode.window.activeTextEditor;
-		if (!editor) { return; }
+		if (!editor) {
+			vscode.window.showWarningMessage ('[Annotation] 활성 에디터가 없습니다.');
+			return;
+		}
+		if (!this.isManagedAnnotationDocument (editor.document)) {
+			vscode.window.showInformationMessage ('[Annotation] C/C++ 파일(.c, .h)에서만 태그를 추가할 수 있습니다.');
+			return;
+		}
 
 		const line = editor.selection.active.line;
 		const content = await vscode.window.showInputBox ({
@@ -897,7 +923,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		// 파일에서 해당 주석 줄 삭제
 		const root = this.config.getWorkspaceRoot ();
-		if (root) {
+		if (root && !ann.virtual) {
 			const absPath = path.join (root, ann.file);
 			const uri = vscode.Uri.file (absPath);
 			try {
@@ -905,7 +931,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				if (ann.line < doc.lineCount) {
 					const lineText = doc.lineAt (ann.line).text;
 					// 해당 줄이 실제로 annotation 주석인지 확인
-					if (lineText.match (SINGLE_LINE_RE) || lineText.match (BLOCK_SINGLE_RE) || lineText.match (BLOCK_START_RE)) {
+					if (this.annotationLineMatches (ann, lineText)) {
 						const edit = new vscode.WorkspaceEdit ();
 						const endLine = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount);
 						const deletedLines = endLine - ann.line;
@@ -955,6 +981,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		this.annotations = this.annotations.filter ((a) => a.id !== id);
 		this.saveAnnotations ();
 		this.updateAllDecorations ();
+		this.syncBreakpoints ();
 		this._onDidChangeTreeData.fire (undefined);
 	}
 
@@ -964,13 +991,17 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 		const current = ann.displayLabel || ann.content;
 		const newLabel = await vscode.window.showInputBox ({
-			prompt: '사이드바 표시 제목 수정 (파일 내 주석은 변경되지 않음)',
+			prompt: ann.virtual ? '사이드바 표시 제목 수정' : '어노테이션 내용 수정 (파일 내 주석도 함께 변경됩니다)',
 			value: current,
 		});
 		if (newLabel === undefined || newLabel === current) { return; }
 
-		ann.displayLabel = newLabel || null;
-		this.saveAnnotations ();
+		if (ann.virtual) {
+			ann.displayLabel = newLabel || null;
+			this.saveAnnotations ();
+		} else {
+			await this.replaceAnnotationTextInFile (ann, newLabel);
+		}
 		this._onDidChangeTreeData.fire (undefined);
 	}
 
@@ -985,7 +1016,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		if (this.filterText) {
 			const q = this.filterText.toLowerCase ();
 			targets = targets.filter ((a) =>
-				(a.displayLabel || a.content).toLowerCase ().includes (q) ||
+				this.getAnnotationLabel (a).toLowerCase ().includes (q) ||
 				a.file.toLowerCase ().includes (q)
 			);
 			label = `"${this.filterText}" 검색 결과`;
@@ -1045,6 +1076,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 
 		this.updateAllDecorations ();
+		this.syncBreakpoints ();
 		this._onDidChangeTreeData.fire (undefined);
 	}
 
@@ -1070,6 +1102,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		this.annotations = this.annotations.filter ((a) => a.file !== file);
 		this.saveAnnotations ();
 		this.updateAllDecorations ();
+		this.syncBreakpoints ();
 		this._onDidChangeTreeData.fire (undefined);
 	}
 
@@ -1080,6 +1113,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		// 파일별 그룹핑 (annotation 객체 전체 보존 — lineEnd 필요)
 		const byFile = new Map<string, Annotation[]> ();
 		for (const ann of anns) {
+			if (ann.virtual) { continue; }
 			const list = byFile.get (ann.file) || [];
 			list.push (ann);
 			byFile.set (ann.file, list);
@@ -1096,7 +1130,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 				for (const ann of sorted) {
 					if (deleted.has (ann.line) || ann.line >= doc.lineCount) { continue; }
 					const lineText = doc.lineAt (ann.line).text;
-					if (lineText.match (SINGLE_LINE_RE) || lineText.match (BLOCK_SINGLE_RE) || lineText.match (BLOCK_START_RE)) {
+					if (this.annotationLineMatches (ann, lineText)) {
 						const endLine = Math.min ((ann.lineEnd ?? ann.line) + 1, doc.lineCount);
 						// 중복 범위 방지 — endLine 내 줄이 이미 삭제 예정인지 확인
 						let overlap = false;
@@ -1183,7 +1217,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		if (this.filterText) {
 			const q = this.filterText.toLowerCase ();
 			allTags = allTags.filter ((a) =>
-				(a.displayLabel || a.content).toLowerCase ().includes (q) ||
+				this.getAnnotationLabel (a).toLowerCase ().includes (q) ||
 				a.file.toLowerCase ().includes (q)
 			);
 		}
@@ -1398,7 +1432,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	}
 
 	getChildren (element?: TagTreeItem): TagTreeItem[] {
-		let active = [...this.annotations];
+		let active = this.annotations.filter ((a) => a.type !== 'note' && a.type !== 'endregion');
 
 		if (this.filterType) {
 			active = active.filter ((a) => a.type === this.filterType);
@@ -1406,7 +1440,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		if (this.filterText) {
 			const q = this.filterText.toLowerCase ();
 			active = active.filter ((a) =>
-				(a.displayLabel || a.content).toLowerCase ().includes (q) ||
+				this.getAnnotationLabel (a).toLowerCase ().includes (q) ||
 				a.file.toLowerCase ().includes (q)
 			);
 		}
@@ -1429,9 +1463,14 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 
 			if (type === 'region') {
 				// 필터 적용 시에도 endregion을 포함해야 스택 매칭이 정상 동작
-				const withEndRegions = this.annotations.filter ((a) =>
-					a.type === 'region' || a.type === 'endregion'
-				);
+				const activeRegions = typeAnns.filter ((a) => a.type === 'region');
+				const activeRegionFiles = new Set (activeRegions.map ((a) => a.file));
+				const withEndRegions = [
+					...activeRegions,
+					...this.annotations.filter ((a) =>
+						a.type === 'endregion' && activeRegionFiles.has (a.file)
+					),
+				];
 				return this.buildRegionTree (withEndRegions);
 			}
 
@@ -1456,7 +1495,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 			const file = fileMatch[1];
 			return active
 				.filter ((a) => a.file === file)
-				.filter ((a) => a.type !== 'endregion')
 				.sort ((a, b) => a.line - b.line)
 				.map ((a) => this.createAnnotationItem (a));
 		}
@@ -1474,6 +1512,117 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		}
 
 		return [];
+	}
+
+	private getAnnotationLabel (ann: Annotation): string {
+		return ann.displayLabel || ann.content || `@${ann.type}`;
+	}
+
+	private isManagedAnnotationDocument (doc: vscode.TextDocument): boolean {
+		if (doc.uri.scheme !== 'file') { return false; }
+		const ext = path.extname (doc.uri.fsPath).toLowerCase ();
+		return ext === '.c' || ext === '.h';
+	}
+
+	private parseAnnotationLine (lineText: string): { type: AnnotationType; content: string } | null {
+		const singleMatch = lineText.match (SINGLE_LINE_RE);
+		if (singleMatch) {
+			return {
+				type: singleMatch[2] as AnnotationType,
+				content: (singleMatch[3] || '').trim (),
+			};
+		}
+
+		const blockMatch = lineText.match (BLOCK_SINGLE_RE);
+		if (blockMatch) {
+			return {
+				type: blockMatch[2] as AnnotationType,
+				content: (blockMatch[3] || '').trim (),
+			};
+		}
+
+		const blockStartMatch = lineText.match (BLOCK_START_RE);
+		if (blockStartMatch) {
+			return {
+				type: blockStartMatch[2] as AnnotationType,
+				content: (blockStartMatch[3] || '').replace (/\s*\*\/.*$/, '').trim (),
+			};
+		}
+
+		return null;
+	}
+
+	private annotationLineMatches (ann: Annotation, lineText: string): boolean {
+		const parsed = this.parseAnnotationLine (lineText);
+		if (!parsed || parsed.type !== ann.type) { return false; }
+		if ((ann.lineEnd ?? ann.line) > ann.line) { return true; }
+		const stored = ann.hasContent === false ? '' : ann.content.trim ();
+		const parsedContent = parsed.content.trim ();
+		return parsedContent === stored || (!parsedContent && (!stored || stored === ann.type));
+	}
+
+	private async replaceAnnotationTextInFile (ann: Annotation, newContent: string): Promise<void> {
+		const root = this.config.getWorkspaceRoot ();
+		if (!root) { return; }
+
+		const uri = vscode.Uri.file (path.join (root, ann.file));
+		try {
+			const doc = await vscode.workspace.openTextDocument (uri);
+			if (ann.line >= doc.lineCount || !this.annotationLineMatches (ann, doc.lineAt (ann.line).text)) {
+				vscode.window.showWarningMessage ('[Annotation] 파일의 태그 위치가 변경되었습니다. 새로고침 후 다시 시도하세요.');
+				return;
+			}
+
+			const endLine = Math.min (ann.lineEnd ?? ann.line, doc.lineCount - 1);
+			const indent = doc.lineAt (ann.line).text.match (/^(\s*)/)?.[1] || '';
+			const safeContent = newContent.replace (/\n/g, ' ').replace (/\*\//g, '* /').trim ();
+			const replacement = safeContent
+				? `${indent}/* @${ann.type} ${safeContent} */`
+				: `${indent}/* @${ann.type} */`;
+			const edit = new vscode.WorkspaceEdit ();
+			edit.replace (
+				uri,
+				new vscode.Range (new vscode.Position (ann.line, 0), doc.lineAt (endLine).range.end),
+				replacement
+			);
+
+			const applied = await vscode.workspace.applyEdit (edit);
+			if (!applied) {
+				vscode.window.showWarningMessage ('[Annotation] 태그 수정에 실패했습니다. 파일이 읽기 전용일 수 있습니다.');
+				return;
+			}
+			if (this._scanTimer) { clearTimeout (this._scanTimer); this._scanTimer = null; }
+			this.scanDocument (doc, true);
+			this.updateAllDecorations ();
+			this.syncBreakpoints ();
+			this._onDidChangeTreeData.fire (undefined);
+		} catch {
+			vscode.window.showWarningMessage (`[Annotation] 파일을 열 수 없습니다: ${ann.file}`);
+		}
+	}
+
+	private warnOnNearbyWarnEdit (
+		doc: vscode.TextDocument,
+		changes: readonly vscode.TextDocumentContentChangeEvent[]
+	): void {
+		const relativePath = vscode.workspace.asRelativePath (doc.uri);
+		const warnAnnotations = this.annotations.filter (
+			(a) => a.file === relativePath && a.type === 'warn' && !a.virtual
+		);
+		if (warnAnnotations.length === 0 || changes.length === 0) { return; }
+
+		const warned = new Set<string> ();
+		for (const change of changes) {
+			const start = change.range.start.line;
+			const end = change.range.end.line;
+			for (const ann of warnAnnotations) {
+				const annStart = Math.max (0, ann.line - 2);
+				const annEnd = (ann.lineEnd ?? ann.line) + 2;
+				if (end < annStart || start > annEnd || warned.has (ann.id)) { continue; }
+				warned.add (ann.id);
+				console.warn (`[Annotation] @warn 근처 수정: ${ann.file}:${ann.line + 1} — ${ann.content || '(내용 없음)'}`);
+			}
+		}
 	}
 
 	private buildTypeGroupRoot (active: Annotation[]): TagTreeItem[] {
@@ -1634,7 +1783,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 	}
 
 	private createAnnotationItem (ann: Annotation): TagTreeItem {
-		const label = ann.displayLabel || ann.content;
+		const label = this.getAnnotationLabel (ann);
 		const item = new TagTreeItem (
 			label,
 			vscode.TreeItemCollapsibleState.None
@@ -1647,7 +1796,7 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		item.description = `${path.basename (ann.file)}:${ann.line + 1}`;
 
 		const tooltipLines = [
-			`**@${ann.type}** ${ann.content}`,
+			`**@${ann.type}** ${ann.content || '(내용 없음)'}`,
 		];
 		if (ann.virtual) {
 			tooltipLines.push (`_자동 감지 (파일에 없음)_`);
@@ -1685,8 +1834,6 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		context.subscriptions.push (
 			vscode.debug.onDidStartDebugSession (async () => {
 				this.syncBreakpoints ();
-				// 조사식은 이전 세션 기록을 초기화하고 새로 등록
-				await this.context.workspaceState.update ('annotation.registeredWatch', undefined);
 				await this.syncWatchExpressions ();
 			})
 		);
@@ -1781,6 +1928,10 @@ export class TagSystem implements vscode.TreeDataProvider<TagTreeItem>, vscode.T
 		const watchExpressions: string[] = [];
 
 		for (const ann of bpAnnotations) {
+			const rawContent = ann.content.trim ();
+			if (!rawContent || (rawContent === ann.type && ann.hasContent !== true)) {
+				continue;
+			}
 			const expressions = ann.content
 				.split (',')
 				.map ((e) => e.trim ())
@@ -2368,7 +2519,13 @@ process.stdin.on('end', () => {
     if (blockSingleRe.test(line)) { continue; }
     // P2: blockStartRe 매칭 시 같은 줄에 */가 있으면 skip하지 않음
     if (blockStartRe.test(line)) {
-      if (!line.includes('*/')) { skip = true; }
+      const closeIdx = line.indexOf('*/');
+      if (closeIdx === -1) {
+        skip = true;
+      } else {
+        const after = line.substring(closeIdx + 2);
+        if (after.trim().length > 0) { out.push(after); }
+      }
       continue;
     }
     out.push(line);
